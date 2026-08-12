@@ -17,8 +17,6 @@ import pypandoc
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from google.auth.transport import requests as google_requests
-from google.oauth2 import id_token
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
@@ -35,7 +33,6 @@ DATABASE_PATH = BASE_DIR / ".tmp" / "markdown.db"
 SESSION_COOKIE = "mdtodocx_session"
 SESSION_TTL = 60 * 60 * 24 * 14
 COOKIE_SECURE = os.getenv("MDTODOCX_COOKIE_SECURE", "0") == "1"
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 app = FastAPI(title="Markdown to DOCX", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -83,8 +80,12 @@ class LoginCredentials(BaseModel):
 
 
 class RegisterCredentials(BaseModel):
-    google_credential: str = Field(..., min_length=20, max_length=5000)
+    email: str = Field(..., min_length=5, max_length=320)
     password: str = Field(..., min_length=10, max_length=200)
+
+
+class EmailLookup(BaseModel):
+    email: str = Field(..., min_length=5, max_length=320)
 
 
 class UserAction(BaseModel):
@@ -163,22 +164,9 @@ def _password_matches(password: str, encoded: str) -> bool:
 
 def _normalize_email(email: str) -> str:
     value = email.strip().lower()
-    if not re.match(r"^[^@\s]+@gmail\.com$", value):
-        raise HTTPException(status_code=400, detail="Use a valid Gmail address")
+    if not re.match(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$", value):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
     return value
-
-
-def _verify_google_credential(credential: str) -> str:
-    if not GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=503, detail="Google login is not configured on the server")
-    try:
-        payload = id_token.verify_oauth2_token(credential, google_requests.Request(), GOOGLE_CLIENT_ID)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Google login could not be verified")
-    email = payload.get("email")
-    if not email or not payload.get("email_verified"):
-        raise HTTPException(status_code=401, detail="Google account email is not verified")
-    return _normalize_email(email)
 
 
 def _session_hash(session_id: str) -> str:
@@ -388,10 +376,26 @@ def auth_me(user=Depends(current_user)):
     return {"id": user["id"], "email": email, "username": email, "is_admin": bool(user["is_admin"])}
 
 
+@app.post("/api/auth/check-email")
+def check_email(payload: EmailLookup):
+    email = _normalize_email(payload.email)
+    with get_db() as connection:
+        exists = connection.execute("SELECT 1 FROM users WHERE email = ? OR username = ?", (email, email)).fetchone() is not None
+    return {"email": email, "exists": exists}
+
+
 @app.post("/api/auth/register")
 def register(payload: RegisterCredentials, response: Response):
-    email = _verify_google_credential(payload.google_credential)
+    email = _normalize_email(payload.email)
     with get_db() as connection:
+        existing = connection.execute("SELECT * FROM users WHERE email = ? OR username = ?", (email, email)).fetchone()
+        if existing:
+            if existing["is_blocked"]:
+                raise HTTPException(status_code=403, detail="This account has been blocked")
+            if not _password_matches(payload.password, existing["password_hash"]):
+                raise HTTPException(status_code=401, detail="This email is already registered. Enter its password to log in.")
+            _create_session(response, existing["id"])
+            return {"id": existing["id"], "email": email, "username": email, "is_admin": bool(existing["is_admin"])}
         is_first = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
         try:
             cursor = connection.execute(
@@ -399,7 +403,7 @@ def register(payload: RegisterCredentials, response: Response):
                 (email, email, _password_hash(payload.password), int(is_first)),
             )
         except sqlite3.IntegrityError as exc:
-            raise HTTPException(status_code=409, detail="This Gmail account is already registered") from exc
+            raise HTTPException(status_code=409, detail="This email is already registered") from exc
         user_id = cursor.lastrowid
     _create_session(response, user_id)
     return {"id": user_id, "email": email, "username": email, "is_admin": is_first}
@@ -411,7 +415,7 @@ def login(payload: LoginCredentials, response: Response):
     with get_db() as connection:
         user = connection.execute("SELECT * FROM users WHERE email = ? OR username = ?", (email, email)).fetchone()
     if not user or not _password_matches(payload.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid Gmail or password")
+        raise HTTPException(status_code=401, detail="Invalid email or password")
     if user["is_blocked"]:
         raise HTTPException(status_code=403, detail="This account has been blocked")
     _create_session(response, user["id"])

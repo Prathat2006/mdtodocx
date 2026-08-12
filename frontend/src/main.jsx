@@ -44,56 +44,33 @@ markdownRenderer.code = ({ text, lang }) => {
 }
 
 const DRAFT_KEY = 'mdtodocx-draft'
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
 function readDraft() {
   try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null') } catch { return null }
 }
 
 function AuthScreen({ onLogin }) {
-  const [registering, setRegistering] = useState(false), [email, setEmail] = useState(''), [password, setPassword] = useState(''), [googleCredential, setGoogleCredential] = useState(''), [showPassword, setShowPassword] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState(false)
-  useEffect(() => {
-    if (!registering || !GOOGLE_CLIENT_ID) return
-    let cancelled = false
-    const renderButton = () => {
-      if (cancelled || !window.google?.accounts?.id) return
-      window.google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: async (response) => {
-        setGoogleCredential(response.credential)
-        setError('')
-        try {
-          const [, body] = response.credential.split('.')
-          const payload = JSON.parse(atob(body.replace(/-/g, '+').replace(/_/g, '/')))
-          setEmail(payload.email || '')
-        } catch { /* server verifies the Google credential */ }
-      } })
-      const target = document.getElementById('google-register-button')
-      if (target) {
-        target.innerHTML = ''
-        window.google.accounts.id.renderButton(target, { theme: 'outline', size: 'large', width: 320, text: 'continue_with' })
-      }
-    }
-    if (window.google?.accounts?.id) renderButton()
-    else {
-      const script = document.createElement('script')
-      script.src = 'https://accounts.google.com/gsi/client'
-      script.async = true
-      script.defer = true
-      script.onload = renderButton
-      document.head.appendChild(script)
-    }
-    return () => { cancelled = true }
-  }, [registering])
+  const [registering, setRegistering] = useState(false), [email, setEmail] = useState(''), [password, setPassword] = useState(''), [emailKnown, setEmailKnown] = useState(null), [showPassword, setShowPassword] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState(false)
+  async function checkEmail(event) {
+    event.preventDefault(); setBusy(true); setError('')
+    try {
+      const response = await fetch('/api/auth/check-email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail || 'Enter a valid email address')
+      setEmail(body.email); setEmailKnown(body.exists)
+      if (!body.exists) setRegistering(true)
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
   async function submit(event) {
     event.preventDefault(); setBusy(true); setError('')
     try {
-      if (registering && !googleCredential) throw new Error('Continue with Google first, then create your password.')
-      const bodyPayload = registering ? { google_credential: googleCredential, password } : { email, password }
+      const bodyPayload = { email, password }
       const response = await fetch(registering ? '/api/auth/register' : '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bodyPayload) })
       const body = await response.json()
       if (!response.ok) throw new Error(body.detail || 'Authentication failed')
       onLogin(body)
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
-  return <main className="auth-shell"><div className="auth-card"><div className="brand"><span className="brand-mark">M</span><span>Mark<span className="accent">→</span>Word</span></div><p className="eyebrow">PRIVATE MARKDOWN WORKSPACE</p><h1>{registering ? 'Create your account.' : 'Welcome back.'}</h1><p className="auth-copy">{registering ? 'Continue with Google to confirm your Gmail, then create your private password.' : 'Log in with your Gmail and the password you created.'}</p><form onSubmit={submit}>{registering && <div className="google-box">{GOOGLE_CLIENT_ID ? <><div id="google-register-button" /><small>{email ? `Gmail selected: ${email}` : 'Google confirms the Gmail for this account.'}</small></> : <div className="error">Set VITE_GOOGLE_CLIENT_ID in the frontend and GOOGLE_CLIENT_ID on the server to enable Google registration.</div>}</div>}{!registering && <label>GMAIL<input value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" inputMode="email" required /></label>}<label>PASSWORD<span className="password-wrap"><input type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} autoComplete={registering ? 'new-password' : 'current-password'} minLength="10" required /><button type="button" className="show-password" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? 'Hide' : 'Show'}</button></span><small>At least 10 characters</small></label>{error && <div className="error">{error}</div>}<button className="export auth-submit" disabled={busy || (registering && !GOOGLE_CLIENT_ID)}>{busy ? 'Working...' : registering ? 'Create password and account' : 'Log in'}</button></form><button className="auth-switch" onClick={() => { setRegistering(v => !v); setGoogleCredential(''); setError('') }}>{registering ? 'Already have an account? Log in' : 'Need an account? Register with Google'}</button></div></main>
+  return <main className="auth-shell"><div className="auth-card"><div className="brand"><span className="brand-mark">M</span><span>Mark<span className="accent">→</span>Word</span></div><p className="eyebrow">PRIVATE MARKDOWN WORKSPACE</p><h1>{registering ? 'Create your account.' : 'Welcome back.'}</h1><p className="auth-copy">{registering ? 'Use your email to create a private workspace password.' : 'Enter your email to continue.'}</p>{emailKnown === null && !registering ? <form onSubmit={checkEmail}><label>EMAIL<input value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" inputMode="email" required /></label>{error && <div className="error">{error}</div>}<button className="export auth-submit" disabled={busy}>{busy ? 'Checking...' : 'Continue'}</button></form> : <form onSubmit={submit}><label>EMAIL<input value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" inputMode="email" required /></label><label>PASSWORD<span className="password-wrap"><input type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} autoComplete={registering ? 'new-password' : 'current-password'} minLength="10" required /><button type="button" className="show-password" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? 'Hide' : 'Show'}</button></span><small>At least 10 characters</small></label>{error && <div className="error">{error}</div>}<button className="export auth-submit" disabled={busy}>{busy ? 'Working...' : registering ? 'Create account' : 'Log in'}</button></form>}<button className="auth-switch" onClick={() => { setRegistering(v => !v); setEmailKnown(null); setPassword(''); setError('') }}>{registering ? 'Already have an account? Log in' : 'Need an account? Register'}</button></div></main>
 }
 
 function AdminPanel({ onClose }) {

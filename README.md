@@ -56,15 +56,7 @@ The browser shows the live SVG diagram, while the DOCX contains the generated PN
 
 ## Accounts and security
 
-The app requires an account. Registering uses Google Identity Services to verify the user's Gmail address, then asks the user to create a local password. After registration, users log in with their Gmail address and that password.
-
-Create a Google OAuth web client ID, then set it in both places before running the app:
-
-```powershell
-$env:GOOGLE_CLIENT_ID="your-google-client-id.apps.googleusercontent.com"
-cd frontend
-$env:VITE_GOOGLE_CLIENT_ID="your-google-client-id.apps.googleusercontent.com"
-```
+The app requires an account. Enter an email address first; the app checks whether it is already registered in the local database. Existing users are asked for their password, while new users can create an account. Registration is idempotent: an existing email is never duplicated, and submitting its correct password signs the user in.
 
 Registering the first account makes it the administrator; later accounts are regular users. Each user has a separate notes list. The administrator can open the Admin panel to list, block/unblock, or delete other users and their notes.
 

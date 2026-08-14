@@ -406,6 +406,18 @@ body {
   overflow: hidden;
   background: transparent;
   color: #36423f;
+  /* Keep the highlighted copy's layout identical to the textarea. */
+  overflow-y: scroll;
+  scrollbar-color: transparent transparent;
+}
+
+.syntax-backdrop::-webkit-scrollbar {
+  width: 15px;
+  background: transparent;
+}
+
+.syntax-backdrop::-webkit-scrollbar-thumb {
+  background: transparent;
 }
 
 .syntax-backdrop code {
@@ -422,7 +434,8 @@ body {
   color: transparent;
   caret-color: #263330;
   resize: none;
-  overflow-y: auto;
+  /* Match the backdrop's reserved scrollbar width so wrapped lines stay aligned. */
+  overflow-y: scroll;
 }
 
 .syntax-editor-container textarea::selection {
@@ -440,17 +453,14 @@ body {
   color: #bf654a; /* Code blocks ``` and inline code ` */
   background: rgba(0, 0, 0, 0.04);
   border-radius: 3px;
-  padding: 1px 3px;
 }
 
 .syntax-backdrop .hljs-strong {
   color: #1d4b40; /* Bold ** */
-  font-weight: 700;
 }
 
 .syntax-backdrop .hljs-emphasis {
   color: #8a577d; /* Italic * */
-  font-style: italic;
 }
 
 .syntax-backdrop .hljs-bullet,

@@ -2,10 +2,16 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { marked } from 'marked'
 import hljs from 'highlight.js/lib/common'
+import markdownLang from 'highlight.js/lib/languages/markdown'
 import mermaid from 'mermaid'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import './styles.css'
+
+// Register Markdown language with highlight.js if not already present
+if (!hljs.getLanguage('markdown')) {
+  hljs.registerLanguage('markdown', markdownLang)
+}
 
 const starter = `# Project brief
 
@@ -16,6 +22,12 @@ Write or paste your **Markdown** here, then export it as a polished Word documen
 - Clean Markdown editing
 - Live preview
 - Editable math equations with Pandoc
+
+\`\`\`javascript
+function greet(name) {
+  console.log("Hello, " + name + "!");
+}
+\`\`\`
 
 > Your content is converted securely on the server.`
 
@@ -30,8 +42,13 @@ function renderMath(source) {
   return withMath.replace(/\u0000CODE(\d+)\u0000/g, (_, index) => codeBlocks[Number(index)])
 }
 
-function escapeHtml(value) { return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]) }
-function renderMermaid(source) { return source.replace(/```mermaid\s*\n([\s\S]*?)\n```/gi, (_, diagram) => `<div class="mermaid">${escapeHtml(diagram.trim())}</div>`) }
+function escapeHtml(value) { 
+  return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]) 
+}
+
+function renderMermaid(source) { 
+  return source.replace(/```mermaid\s*\n([\s\S]*?)\n```/gi, (_, diagram) => `<div class="mermaid">${escapeHtml(diagram.trim())}</div>`) 
+}
 
 const markdownRenderer = new marked.Renderer()
 markdownRenderer.code = ({ text, lang }) => {
@@ -46,6 +63,56 @@ markdownRenderer.code = ({ text, lang }) => {
 const DRAFT_KEY = 'mdtodocx-draft'
 function readDraft() {
   try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null') } catch { return null }
+}
+
+/**
+ * VS Code-style syntax-highlighted Markdown Editor
+ */
+function MarkdownCodeEditor({ value, onChange, onScrollSync, editorRef }) {
+  const backdropRef = useRef(null)
+
+  // Highlight markdown syntax using highlight.js
+  const highlightedCode = useMemo(() => {
+    try {
+      const res = hljs.highlight(value || '', { language: 'markdown', ignoreIllegals: true })
+      // Append newline to match textarea height trailing behavior
+      return res.value + (value.endsWith('\n') ? ' ' : '')
+    } catch {
+      return escapeHtml(value || '')
+    }
+  }, [value])
+
+  const handleScroll = (e) => {
+    if (backdropRef.current) {
+      backdropRef.current.scrollTop = e.currentTarget.scrollTop
+      backdropRef.current.scrollLeft = e.currentTarget.scrollLeft
+    }
+    if (onScrollSync) {
+      onScrollSync(e)
+    }
+  }
+
+  return (
+    <div className="syntax-editor-container">
+      {/* Visual highlighted layer */}
+      <pre ref={backdropRef} className="syntax-backdrop" aria-hidden="true">
+        <code dangerouslySetInnerHTML={{ __html: highlightedCode }} />
+      </pre>
+
+      {/* Editable input layer */}
+      <textarea
+        ref={editorRef}
+        value={value}
+        onChange={onChange}
+        onScroll={handleScroll}
+        spellCheck="false"
+        autoCapitalize="off"
+        autoComplete="off"
+        aria-label="Markdown editor"
+        placeholder="Start writing Markdown…"
+      />
+    </div>
+  )
 }
 
 function AuthScreen({ onLogin }) {
@@ -157,9 +224,11 @@ function App() {
   }
   function syncScroll(event) {
     if (!liveScroll) return
-    const source = event.currentTarget; const target = source === editorRef.current ? previewRef.current : editorRef.current
+    const source = event.currentTarget
+    const target = source === editorRef.current ? previewRef.current : editorRef.current
     if (!target) return
-    const sourceMax = source.scrollHeight - source.clientHeight; const targetMax = target.scrollHeight - target.clientHeight
+    const sourceMax = source.scrollHeight - source.clientHeight
+    const targetMax = target.scrollHeight - target.clientHeight
     target.scrollTop = sourceMax > 0 ? (source.scrollTop / sourceMax) * targetMax : 0
   }
 
@@ -172,9 +241,47 @@ function App() {
     <section className="intro"><div><p className="eyebrow">MARKDOWN DOCUMENT STUDIO</p><h1>From plain text<br /><em>to polished pages.</em></h1><p className="subtitle">A focused writing space for turning Markdown into beautiful, editable Word documents.</p></div><div className="doc-info"><label>DOCUMENT NAME<input value={filename} onChange={e => { setFilename(e.target.value); setSaved(false) }} /><small>.docx</small></label><p>Supports headings, lists, tables, code, links, and LaTeX math.</p></div></section>
     <section className="app-area">
       <aside className="sidebar"><button className="new-doc" onClick={newDocument}>＋ New markdown</button><div className="sidebar-tabs"><span>Notes</span><span>{notes.length}</span></div><div className="side-list">{notes.map(item => <div className="side-item" key={item.id}><button className="side-open" onClick={() => openDocument(item)}><strong>{item.title}</strong><small>{new Date(`${item.updated_at}Z`).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</small></button><button className="delete-note" onClick={e => deleteNote(e, item.id)} title="Delete note" aria-label={`Delete ${item.title}`}>×</button></div>)}{!notes.length && <p className="empty">No notes yet.</p>}</div></aside>
-      <div className="workspace"><div className="panel editor-panel"><div className="panel-head"><span><b className="dot blue" /> Markdown</span><span className="head-tools"><span className="hint">{markdown.length.toLocaleString()} characters</span><button className="icon-button" title="Maximize editor" onClick={() => setMaximized(true)}>⛶</button></span></div><textarea ref={editorRef} value={markdown} onChange={e => { setMarkdown(e.target.value); setSaved(false) }} onScroll={syncScroll} spellCheck="false" aria-label="Markdown editor" placeholder="Start writing Markdown…" /></div><div className="divider" /><div className="panel preview-panel"><div className="panel-head"><span><b className="dot green" /> Preview</span><span className="head-tools"><label className="toggle-label"><input type="checkbox" checked={liveScroll} onChange={e => setLiveScroll(e.target.checked)} /><span className="toggle" /> Live scroll</label><span className="hint">Live preview</span><button className="mini-export" onClick={exportDoc} disabled={busy || !markdown.trim()} title="Export from preview">↓ Export</button><button className="icon-button" title="Maximize workspace" onClick={() => setMaximized(v => !v)}>⛶</button></span></div><article ref={previewRef} onScroll={syncScroll} className="preview" dangerouslySetInnerHTML={preview} /></div></div>
+      
+      <div className="workspace">
+        <div className="panel editor-panel">
+          <div className="panel-head">
+            <span><b className="dot blue" /> Markdown</span>
+            <span className="head-tools">
+              <span className="hint">{markdown.length.toLocaleString()} characters</span>
+              <button className="icon-button" title="Maximize editor" onClick={() => setMaximized(true)}>⛶</button>
+            </span>
+          </div>
+          
+          {/* Syntax-Highlighted Editor */}
+          <MarkdownCodeEditor
+            editorRef={editorRef}
+            value={markdown}
+            onChange={e => { setMarkdown(e.target.value); setSaved(false) }}
+            onScrollSync={syncScroll}
+          />
+        </div>
+
+        <div className="divider" />
+
+        <div className="panel preview-panel">
+          <div className="panel-head">
+            <span><b className="dot green" /> Preview</span>
+            <span className="head-tools">
+              <label className="toggle-label">
+                <input type="checkbox" checked={liveScroll} onChange={e => setLiveScroll(e.target.checked)} />
+                <span className="toggle" /> Live scroll
+              </label>
+              <span className="hint">Live preview</span>
+              <button className="mini-export" onClick={exportDoc} disabled={busy || !markdown.trim()} title="Export from preview">↓ Export</button>
+              <button className="icon-button" title="Maximize workspace" onClick={() => setMaximized(v => !v)}>⛶</button>
+            </span>
+          </div>
+          <article ref={previewRef} onScroll={syncScroll} className="preview" dangerouslySetInnerHTML={preview} />
+        </div>
+      </div>
     </section>
-    {error && <div className="error">{error}</div>}{adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}<footer><span>⌘ Enter to export · Esc to exit maximize</span><span>Powered by FastAPI + Pandoc + SQLite</span></footer>
+    {error && <div className="error">{error}</div>}{adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}
+    <footer><span>⌘ Enter to export · Esc to exit maximize</span><span>Powered by FastAPI + Pandoc + SQLite</span></footer>
   </main>
 }
 

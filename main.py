@@ -370,7 +370,7 @@ def render_mermaid_blocks(markdown: str, job_dir: Path) -> str:
 
 
 def render_graphviz_blocks(markdown: str, job_dir: Path) -> str:
-    """Render Graphviz DOT fenced blocks to PNG files and replace them with images."""
+    """Render Graphviz DOT fenced blocks to SVG files and replace them with images."""
     pattern = r"```(?:dot|graphviz)\s*\n([\s\S]*?)\n```"
     matches = list(re.finditer(pattern, markdown, flags=re.IGNORECASE))
     if not matches:
@@ -383,23 +383,14 @@ def render_graphviz_blocks(markdown: str, job_dir: Path) -> str:
             "Install Graphviz and make sure dot is available on PATH."
         )
 
-    GRAPHVIZ_DPI = 300  # print-quality; bump to 600 if you need it even crisper
-
     rendered = markdown
     for index, match in reversed(list(enumerate(matches, start=1))):
         source_path = job_dir / f"graphviz-{index}.dot"
-        image_path = job_dir / f"graphviz-{index}.png"
+        image_path = job_dir / f"graphviz-{index}.svg"
         source_path.write_text(match.group(1).strip() + "\n", encoding="utf-8")
         try:
             subprocess.run(
-                [
-                    graphviz_cli,
-                    "-Tpng",
-                    f"-Gdpi={GRAPHVIZ_DPI}",
-                    str(source_path),
-                    "-o",
-                    str(image_path),
-                ],
+                [graphviz_cli, "-Tsvg", str(source_path), "-o", str(image_path)],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -408,11 +399,9 @@ def render_graphviz_blocks(markdown: str, job_dir: Path) -> str:
             renderer_error = (exc.stderr or exc.stdout or "Graphviz returned an unknown error.").strip()
             raise RuntimeError(f"Graphviz diagram {index} could not be rendered: {renderer_error}") from exc
         if not image_path.exists() or image_path.stat().st_size == 0:
-            raise RuntimeError(f"Graphviz diagram {index} did not produce a PNG file.")
+            raise RuntimeError(f"Graphviz diagram {index} did not produce an SVG file.")
 
-        # Cap the DISPLAY width in the doc (Pandoc attr syntax) so the high-DPI
-        # PNG doesn't get inserted at its full pixel size (which would be huge).
-        image_reference = f'![Graphviz diagram](graphviz-{index}.png){{width=5in}}'
+        image_reference = f"![Graphviz diagram](graphviz-{index}.svg)"
         rendered = rendered[: match.start()] + image_reference + rendered[match.end() :]
     return rendered
 

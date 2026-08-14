@@ -386,15 +386,13 @@ def render_graphviz_blocks(markdown: str, job_dir: Path) -> str:
     rendered = markdown
     for index, match in reversed(list(enumerate(matches, start=1))):
         source_path = job_dir / f"graphviz-{index}.dot"
-        
-        # 1. Change the output file extension to .png
         image_path = job_dir / f"graphviz-{index}.png" 
         source_path.write_text(match.group(1).strip() + "\n", encoding="utf-8")
         
         try:
             subprocess.run(
-                # 2. Use -Tpng and set a high DPI (-Gdpi=300) for document-quality resolution
-                [graphviz_cli, "-Tpng", "-Gdpi=300", str(source_path), "-o", str(image_path)],
+                # Added "-Kneato" to force the correct layout engine
+                [graphviz_cli, "-Kneato", "-Tpng", "-Gdpi=300", str(source_path), "-o", str(image_path)],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -406,7 +404,6 @@ def render_graphviz_blocks(markdown: str, job_dir: Path) -> str:
         if not image_path.exists() or image_path.stat().st_size == 0:
             raise RuntimeError(f"Graphviz diagram {index} did not produce a PNG file.")
 
-        # 3. Reference the new PNG file in the markdown replacement
         image_reference = f"![Graphviz diagram](graphviz-{index}.png)"
         rendered = rendered[: match.start()] + image_reference + rendered[match.end() :]
         

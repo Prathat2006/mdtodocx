@@ -267,6 +267,7 @@ def convert_md_file(file_bytes: bytes, filename: str) -> str:
     - Markdown
     - HTML tables (converted to real Word tables, incl. rowspan/colspan)
     - Mermaid diagrams
+    - Graphviz diagrams (dot/graphviz fenced blocks)
     - Images
     - Math
     """
@@ -289,6 +290,9 @@ def convert_md_file(file_bytes: bytes, filename: str) -> str:
 
     # Mermaid -> PNG, replaced with standard Markdown image refs
     markdown = render_mermaid_blocks(markdown, job_dir)
+
+    # Graphviz -> PNG, replaced with standard Markdown image refs
+    markdown = render_graphviz_blocks(markdown, job_dir)
 
     # Build one HTML document: Markdown chunks rendered to HTML,
     # raw <table> blocks preserved verbatim for the HTML reader to parse.
@@ -361,6 +365,42 @@ def render_mermaid_blocks(markdown: str, job_dir: Path) -> str:
         if not image_path.exists() or image_path.stat().st_size == 0:
             raise RuntimeError(f"Mermaid diagram {index} did not produce a PNG file.")
         image_reference = f"![Mermaid diagram](diagram-{index}.png)"
+        rendered = rendered[: match.start()] + image_reference + rendered[match.end() :]
+    return rendered
+
+
+def render_graphviz_blocks(markdown: str, job_dir: Path) -> str:
+    """Render Graphviz DOT fenced blocks to PNG files and replace them with images."""
+    pattern = r"```(?:dot|graphviz)\s*\n([\s\S]*?)\n```"
+    matches = list(re.finditer(pattern, markdown, flags=re.IGNORECASE))
+    if not matches:
+        return markdown
+
+    graphviz_cli = shutil.which("dot") or shutil.which("dot.exe")
+    if not graphviz_cli:
+        raise RuntimeError(
+            "Graphviz diagrams require the Graphviz 'dot' command. "
+            "Install Graphviz and make sure dot is available on PATH."
+        )
+
+    rendered = markdown
+    for index, match in reversed(list(enumerate(matches, start=1))):
+        source_path = job_dir / f"graphviz-{index}.dot"
+        image_path = job_dir / f"graphviz-{index}.png"
+        source_path.write_text(match.group(1).strip() + "\n", encoding="utf-8")
+        try:
+            subprocess.run(
+                [graphviz_cli, "-Tpng", str(source_path), "-o", str(image_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            renderer_error = (exc.stderr or exc.stdout or "Graphviz returned an unknown error.").strip()
+            raise RuntimeError(f"Graphviz diagram {index} could not be rendered: {renderer_error}") from exc
+        if not image_path.exists() or image_path.stat().st_size == 0:
+            raise RuntimeError(f"Graphviz diagram {index} did not produce a PNG file.")
+        image_reference = f"![Graphviz diagram](graphviz-{index}.png)"
         rendered = rendered[: match.start()] + image_reference + rendered[match.end() :]
     return rendered
 

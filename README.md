@@ -1,6 +1,6 @@
 # Mark→Word
 
-A small Markdown editor that converts your writing to an editable `.docx` file with FastAPI, React, and Pandoc. It supports inline/display LaTeX (`$x^2$`, `\\(x^2\\)`, `$$x^2$$`, `\\[x^2\\]`), pipe tables, raw HTML tables, and Mermaid diagrams.
+A small Markdown editor that converts your writing to an editable `.docx` file with FastAPI, React, and Pandoc. It supports inline/display LaTeX (`$x^2$`, `\\(x^2\\)`, `$$x^2$$`, `\\[x^2\\]`), pipe tables, raw HTML tables, Mermaid diagrams, and Graphviz diagrams.
 
 ## Requirements
 
@@ -9,6 +9,7 @@ A small Markdown editor that converts your writing to an editable `.docx` file w
 - Node.js 18+
 - [Pandoc](https://pandoc.org/installing.html) installed and available on your PATH
 - Mermaid CLI installed and available on your PATH: `npm install --global @mermaid-js/mermaid-cli`
+- Graphviz installed with the `dot` command available on your PATH
 
 ## Run in development
 
@@ -53,6 +54,18 @@ flowchart LR
 ````
 
 The browser shows the live SVG diagram, while the DOCX contains the generated PNG image.
+
+Use a fenced `dot` or `graphviz` block for Graphviz diagrams:
+
+````markdown
+```dot
+digraph G {
+  Markdown -> Preview -> DOCX
+}
+```
+````
+
+The browser renders Graphviz as an SVG image, while the DOCX contains a generated PNG image.
 
 ## Accounts and security
 

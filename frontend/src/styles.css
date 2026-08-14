@@ -532,6 +532,18 @@ body {
   font: inherit;
 }
 
+.preview .graphviz-diagram {
+  margin: 18px 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.preview .graphviz-diagram svg {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+}
+
 .preview li {
   margin: 5px 0;
 }

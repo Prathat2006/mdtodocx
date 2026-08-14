@@ -4,6 +4,7 @@ import { marked } from 'marked'
 import hljs from 'highlight.js/lib/common'
 import markdownLang from 'highlight.js/lib/languages/markdown'
 import mermaid from 'mermaid'
+import { instance as createGraphviz } from '@viz-js/viz'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import './styles.css'
@@ -48,6 +49,16 @@ function escapeHtml(value) {
 
 function renderMermaid(source) { 
   return source.replace(/```mermaid\s*\n([\s\S]*?)\n```/gi, (_, diagram) => `<div class="mermaid">${escapeHtml(diagram.trim())}</div>`) 
+}
+
+function renderGraphviz(source, diagrams) {
+  let index = 0
+  return source.replace(/```(?:dot|graphviz)\s*\n([\s\S]*?)\n```/gi, (_, diagram) => {
+    const rendered = diagrams[index++]
+    return rendered
+      ? `<div class="graphviz-diagram">${rendered}</div>`
+      : '```dot\n' + diagram + '\n```'
+  })
 }
 
 const markdownRenderer = new marked.Renderer()
@@ -163,9 +174,12 @@ function App() {
   const [liveScroll, setLiveScroll] = useState(true)
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('mdtodocx-theme') === 'dark')
   const [adminOpen, setAdminOpen] = useState(false)
+  const [graphvizDiagrams, setGraphvizDiagrams] = useState([])
   const editorRef = useRef(null)
   const previewRef = useRef(null)
-  const preview = useMemo(() => ({ __html: marked.parse(renderMermaid(renderMath(markdown)), { renderer: markdownRenderer }) }), [markdown])
+  const preview = useMemo(() => ({
+    __html: marked.parse(renderMath(renderMermaid(renderGraphviz(markdown, graphvizDiagrams))), { renderer: markdownRenderer })
+  }), [markdown, graphvizDiagrams])
 
   useEffect(() => { fetch('/api/auth/me').then(response => response.ok ? response.json() : null).then(value => { setUser(value); setAuthChecked(true) }).catch(() => setAuthChecked(true)) }, [])
   useEffect(() => { if (user) loadNotes() }, [user])
@@ -180,6 +194,27 @@ function App() {
     mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'strict' })
     mermaid.run({ nodes: previewRef.current?.querySelectorAll('.mermaid') || [] }).catch(() => setError('One of the Mermaid diagrams could not be rendered.'))
   }, [preview])
+  useEffect(() => {
+    let cancelled = false
+    const blocks = [...markdown.matchAll(/```(?:dot|graphviz)\s*\n([\s\S]*?)\n```/gi)]
+    if (!blocks.length) {
+      setGraphvizDiagrams([])
+      return () => { cancelled = true }
+    }
+    createGraphviz().then(viz => {
+      const diagrams = blocks.map(([, source]) => {
+        try {
+          return viz.renderString(source.trim(), { format: 'svg' })
+        } catch {
+          return ''
+        }
+      })
+      if (!cancelled) setGraphvizDiagrams(diagrams)
+    }).catch(() => {
+      if (!cancelled) setGraphvizDiagrams(blocks.map(() => ''))
+    })
+    return () => { cancelled = true }
+  }, [markdown])
   useEffect(() => {
     const onKeyDown = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); exportDoc() }

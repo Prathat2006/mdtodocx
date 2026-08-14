@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "@viz-js/viz": "^3.29.0",
     "highlight.js": "^11.11.1",
     "katex": "latest",
     "marked": "latest",

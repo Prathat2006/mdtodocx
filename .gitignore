@@ -18,3 +18,5 @@ frontend/dist/
 # env
 .env
 frontend/.env
+
+mdtodocx.tar

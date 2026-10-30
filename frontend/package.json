@@ -14,7 +14,8 @@
     "highlight.js": "^11.11.1",
     "katex": "latest",
     "marked": "latest",
-    "mermaid": "latest",
+    "mdast-util-from-markdown": "^2.1.0",
+    "mermaid": "^12.2.0",
     "react": "latest",
     "react-dom": "latest",
     "vite": "latest"

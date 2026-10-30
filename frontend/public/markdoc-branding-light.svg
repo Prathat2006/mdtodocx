@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="26 32 200 83" role="img" aria-labelledby="title desc">
+  <title id="title">MarkDoc wordmark</title>
+  <desc id="desc">MarkDoc wordmark with Mark in a clean sans serif, Doc in coral italic, and a curved coral underline.</desc>
+  <g>
+    <text x="31" y="64" fill="#20201f" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="400" letter-spacing="-1.6">Mark</text>
+    <text x="139" y="64" fill="#ed795d" font-family="Georgia, 'Times New Roman', serif" font-size="42" font-style="italic" letter-spacing="-1.5">Doc</text>
+    <path d="M43 87 Q111 111 199 79" fill="none" stroke="#ed795d" stroke-width="3.4" stroke-linecap="round"/>
+  </g>
+</svg>

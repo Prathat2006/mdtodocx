@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="73 16 97 110" role="img" aria-labelledby="title desc">
+  <title id="title">MarkDoc logo</title>
+  <desc id="desc">A stylized green document with a coral folded corner and small pixel squares.</desc>
+  <g shape-rendering="geometricPrecision">
+    <!-- Pixel trail -->
+    <g fill="#397e68">
+      <rect x="105" y="21" width="10" height="10" rx="2"/>
+      <rect x="120" y="21" width="9" height="10" rx="2"/>
+      <rect x="90" y="36" width="9" height="9" rx="1.5"/>
+      <rect x="105" y="51" width="10" height="10" rx="2"/>
+      <rect x="90" y="66" width="9" height="9" rx="1.5"/>
+      <rect x="105" y="81" width="10" height="10" rx="2"/>
+      <rect x="90" y="96" width="9" height="9" rx="1.5"/>
+      <rect x="105" y="111" width="10" height="10" rx="2"/>
+      <rect x="120" y="111" width="9" height="10" rx="2"/>
+    </g>
+    <g fill="#8fc9b5">
+      <rect x="78" y="40" width="5" height="5" rx="1"/>
+      <rect x="78" y="76" width="5" height="5" rx="1"/>
+      <rect x="78" y="101" width="5" height="5" rx="1"/>
+    </g>
+    <rect x="105" y="70" width="10" height="10" rx="2" fill="#ef795d"/>
+    <!-- Main document -->
+    <path d="M123 21h24l18 18v78a4 4 0 0 1-4 4h-38a4 4 0 0 1-4-4V25a4 4 0 0 1 4-4z" fill="#286b59"/>
+    <path d="M147 21v14a4 4 0 0 0 4 4h14z" fill="#ed795d"/>
+    <!-- Document lines -->
+    <g fill="none" stroke="#f3f4ed" stroke-linecap="round" stroke-width="3">
+      <path d="M133 53h18"/>
+      <path d="M133 70h21"/>
+      <path d="M133 87h12"/>
+    </g>
+  </g>
+</svg>

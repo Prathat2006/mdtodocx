@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import re
 import hashlib
 import hmac
@@ -8,6 +9,7 @@ import secrets
 import sqlite3
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from contextlib import contextmanager
@@ -25,6 +27,7 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_FOLDER = BASE_DIR / ".tmp" / "uploads"
 OUTPUT_FOLDER = BASE_DIR / ".tmp" / "outputs"
 REFERENCE_DOC = BASE_DIR / "reference.docx"
+REFERENCE_FOLDER = BASE_DIR / "references"
 FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
 
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -33,6 +36,7 @@ DATABASE_PATH = BASE_DIR / ".tmp" / "markdown.db"
 SESSION_COOKIE = "mdtodocx_session"
 SESSION_TTL = 60 * 60 * 24 * 14
 COOKIE_SECURE = os.getenv("MDTODOCX_COOKIE_SECURE", "0") == "1"
+REFERENCE_FOLDER.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Markdown to DOCX", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -67,6 +71,7 @@ TABLE_BLOCK_RE = re.compile(r"<table\b[\s\S]*?</table>", re.IGNORECASE)
 class ExportRequest(BaseModel):
     markdown: str = Field(..., min_length=1, max_length=2_000_000)
     filename: str = Field(default="document.md", max_length=100)
+    reference: str = Field(default="Default", max_length=120)
 
 
 class NoteRequest(BaseModel):
@@ -76,12 +81,16 @@ class NoteRequest(BaseModel):
 
 class LoginCredentials(BaseModel):
     email: str = Field(..., min_length=5, max_length=320)
-    password: str = Field(..., min_length=10, max_length=200)
+    password: str = Field(..., min_length=8, max_length=200)
 
 
 class RegisterCredentials(BaseModel):
     email: str = Field(..., min_length=5, max_length=320)
-    password: str = Field(..., min_length=10, max_length=200)
+    password: str = Field(..., min_length=8, max_length=200)
+
+
+class TikzPreviewRequest(BaseModel):
+    source: str = Field(..., min_length=1, max_length=20_000)
 
 
 class EmailLookup(BaseModel):
@@ -206,9 +215,15 @@ def preprocess_markdown(markdown: str) -> str:
 
     - Normalizes line endings.
     - Tidies whitespace inside raw HTML <table> blocks (does not alter content).
+    - Neutralizes indented code blocks (4+ spaces or a leading tab), which ambush
+      nested lists; real code must use fenced ``` blocks. Leading whitespace becomes
+      non-breaking spaces so the visual indentation survives into the DOCX
+      (same transform as the browser preview uses).
     """
 
     markdown = markdown.replace("\r\n", "\n").replace("\r", "\n")
+
+    markdown = _neutralize_indented_code(markdown)
 
     def clean_table(match: re.Match) -> str:
         table = match.group(0)
@@ -218,6 +233,42 @@ def preprocess_markdown(markdown: str) -> str:
     markdown = TABLE_BLOCK_RE.sub(clean_table, markdown)
 
     return markdown
+
+
+# \usepackage-style list markers and blockquotes keep their leading indentation
+# (nested lists rely on it); raw HTML lines are left verbatim for the table splice.
+INDENTED_LIST_PREFIX_RE = re.compile(r"^(?:[-+*]\s|\d+[.)]\s|>\s?)")
+
+
+def _neutralize_indented_code(markdown: str) -> str:
+    """Rewrite 4+ space indented lines from plain indented code into plain text."""
+    raw_blocks: list[str] = []
+
+    def protect(match: re.Match) -> str:
+        raw_blocks.append(match.group(0))
+        return f"\x00RAW{len(raw_blocks) - 1}\x00"
+
+    protected = re.sub(r"```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)", protect, markdown)
+    protected = TABLE_BLOCK_RE.sub(protect, protected)
+
+    lines = protected.split("\n")
+    for i, line in enumerate(lines):
+        run = re.match(r"^[\t ]+", line)
+        if not run:
+            continue
+        rest = line[run.end():]
+        if not rest or INDENTED_LIST_PREFIX_RE.match(rest) or rest.startswith("<"):
+            continue
+        # tab stops of 4: a tab advances to the next multiple of 4 columns
+        columns = 0
+        for character in run.group(0):
+            columns += 4 - columns % 4 if character == "\t" else 1
+        if columns < 4:
+            continue
+        lines[i] = "\N{NO-BREAK SPACE}" * columns + rest
+    protected = "\n".join(lines)
+
+    return re.sub(r"\x00RAW(\d+)\x00", lambda match: raw_blocks[int(match.group(1))], protected)
 
 
 def markdown_chunk_to_html(chunk: str) -> str:
@@ -259,7 +310,30 @@ def markdown_to_html_document(markdown: str) -> str:
     return "\n".join(p for p in parts if p)
 
 
-def convert_md_file(file_bytes: bytes, filename: str) -> str:
+def available_reference_styles() -> list[str]:
+    """
+    Reference style ids come directly from the file names of *.docx files in
+    the references folder (e.g. Default, round, Quad). Adding files later -- or
+    extensions like 1.docx / 2.docx -- needs no code change.
+    """
+    ids = sorted({path.stem for path in REFERENCE_FOLDER.glob("*.docx")})
+    if not ids and REFERENCE_DOC.exists():
+        ids = ["Default"]
+    return ids
+
+
+def resolve_reference_doc(style: str) -> Path | None:
+    """Map a style id to its .docx file, falling back to the legacy reference.docx."""
+    name = Path(style.strip()).name
+    if not name.lower().endswith(".docx"):
+        name += ".docx"
+    candidate = REFERENCE_FOLDER / name
+    if candidate.is_file():
+        return candidate
+    return REFERENCE_DOC if REFERENCE_DOC.exists() else None
+
+
+def convert_md_file(file_bytes: bytes, filename: str, reference_doc: Path | None = None) -> str:
     """
     Save Markdown to a temporary file and convert it to DOCX with Pandoc.
 
@@ -268,6 +342,7 @@ def convert_md_file(file_bytes: bytes, filename: str) -> str:
     - HTML tables (converted to real Word tables, incl. rowspan/colspan)
     - Mermaid diagrams
     - Graphviz diagrams (dot/graphviz fenced blocks)
+    - TikZ/LaTeX diagrams (tikz fenced blocks, or full LaTeX sources)
     - Images
     - Math
     """
@@ -294,6 +369,9 @@ def convert_md_file(file_bytes: bytes, filename: str) -> str:
     # Graphviz -> PNG, replaced with standard Markdown image refs
     markdown = render_graphviz_blocks(markdown, job_dir)
 
+    # TikZ/LaTeX diagrams -> PNG, replaced with standard Markdown image refs
+    markdown = render_tikz_blocks(markdown, job_dir)
+
     # Build one HTML document: Markdown chunks rendered to HTML,
     # raw <table> blocks preserved verbatim for the HTML reader to parse.
     try:
@@ -312,8 +390,10 @@ def convert_md_file(file_bytes: bytes, filename: str) -> str:
         "--highlight-style=tango",
     ]
 
-    if REFERENCE_DOC.exists():
-        extra_args.extend(["--reference-doc", str(REFERENCE_DOC)])
+    selected_reference = reference_doc if reference_doc and reference_doc.is_file() else (REFERENCE_DOC if REFERENCE_DOC.exists() else None)
+
+    if selected_reference:
+        extra_args.extend(["--reference-doc", str(selected_reference)])
 
     try:
         pypandoc.convert_file(
@@ -348,13 +428,18 @@ def render_mermaid_blocks(markdown: str, job_dir: Path) -> str:
         )
 
     rendered = markdown
+    # Puppeteer config (e.g. --no-sandbox for root users in Docker) shipped next to main.py.
+    puppeteer_config = Path(__file__).resolve().parent / "puppeteer-config.json"
+    cli_flags = []
+    if puppeteer_config.exists():
+        cli_flags += ["-p", str(puppeteer_config)]
     for index, match in reversed(list(enumerate(matches, start=1))):
         source_path = job_dir / f"diagram-{index}.mmd"
         image_path = job_dir / f"diagram-{index}.png"
         source_path.write_text(match.group(1).strip() + "\n", encoding="utf-8")
         try:
             subprocess.run(
-                [mermaid_cli, "-i", str(source_path), "-o", str(image_path), "--backgroundColor", "transparent"],
+                [mermaid_cli, *cli_flags, "-i", str(source_path), "-o", str(image_path), "--backgroundColor", "transparent"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -408,6 +493,164 @@ def render_graphviz_blocks(markdown: str, job_dir: Path) -> str:
         rendered = rendered[: match.start()] + image_reference + rendered[match.end() :]
         
     return rendered
+
+
+# Preamble for TikZ fences that do not ship a complete LaTeX document.
+# The standalone class crops the PDF to the picture's real bounding box, so
+# no manual whitespace trimming is needed. Kept deliberately simple: str
+# concatenation instead of .format(), because LaTeX braces fight % formatting.
+TIKZ_PREAMBLE = (
+    "\\documentclass[tikz,border=8pt]{standalone}\n"
+    "\\usepackage{pgfplots,pgfplotstable}\n"
+    "\\pgfplotsset{compat=newest}\n"
+    "\\usetikzlibrary{arrows.meta,calc,chains,decorations.pathmorphing,"
+    "decorations.pathreplacing,fit,matrix,positioning,patterns,quotes,angles,"
+    "backgrounds,shapes.geometric,shapes.misc}\n"
+)
+
+TIKZ_PATTERN = r"```(?:tikz|latex-diagram|pgfplots)\s*\n([\s\S]*?)\n```"
+
+# \usepackage[options]{pkg} / \usetikzlibrary{libs}, including multi-line braces.
+TIKZ_DIRECTIVE_RE = re.compile(
+    r"\\(?:usepackage(?:\[[^\]]*\])?|usetikzlibrary|RequirePackage)\s*(?:\[[^\]]*\]\s*)?\{(?:[^{}]|\{[^{}]*\})*\}",
+    re.DOTALL,
+)
+
+
+def _latex_log_error(log_path: Path) -> str:
+    """Extract the first fatal LaTeX error lines from a .log file, for error messages."""
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    # -file-line-error produces "file.tex:12: Error text", classic mode "! ...",
+    # and continuation lines are indented below them.
+    fatal: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("!") or re.match(r"^[^! \t\n][^\n]*?:\d+: ", line):
+            fatal.append(line.strip())
+        elif fatal and line.startswith(("  ", "\t")):
+            if line.strip() and len(fatal) < 10:
+                fatal.append(line.strip())
+        elif fatal:
+            break
+    if not fatal:
+        return ""
+    return "\n".join(fatal[:10])
+
+
+def _compile_tikz_png(source: str, output_image: Path, index: int) -> None:
+    """
+    Compile one TikZ diagram source to a PNG file.
+
+    Accepts either a bare ``tikzpicture``/LaTeX snippet (wrapped automatically
+    in a standalone document) or a complete document with its own
+    ``\\documentclass``. Compiles with xelatex into an isolated working directory
+    and rasterizes the cropped PDF with pdftoppm.
+    """
+    latex_engine = shutil.which("xelatex") or shutil.which("pdflatex")
+    if not latex_engine:
+        raise RuntimeError(
+            "TikZ diagrams require a LaTeX engine with TeX Live TikZ support. "
+            "Install TeX Live and make sure xelatex is available on PATH "
+            "(apt install texlive-latex-extra texlive-pictures texlive-xetex)."
+        )
+    raster_cli = shutil.which("pdftoppm") or shutil.which("pdftoppm.exe")
+    if not raster_cli:
+        raise RuntimeError(
+            "TikZ diagrams require the 'pdftoppm' command (poppler-utils) to "
+            "convert the compiled PDF into an image."
+        )
+
+    work_dir = output_image.parent / f"tikz-work-{output_image.stem}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    if re.search(r"\\(?:input|include)\b", source):
+        raise RuntimeError(
+            "TikZ diagrams must be self-contained: \\input/\\include of external "
+            ".tex files is not supported. Paste the complete tikzpicture code "
+            "directly into the fence instead."
+        )
+    tex_path = work_dir / "diagram.tex"
+    if "\\documentclass" in source:
+        tex_source = source
+    else:
+        # Snippets may carry their own \usepackage/\usetikzlibrary lines; those
+        # are only valid in the LaTeX preamble, so hoist them out of the body.
+        preamble_additions = "".join(match.group(0) + "\n" for match in TIKZ_DIRECTIVE_RE.finditer(source))
+        body = TIKZ_DIRECTIVE_RE.sub("", source).strip()
+        tex_source = (
+            TIKZ_PREAMBLE
+            + preamble_additions
+            + "\n\\begin{document}\n"
+            + body
+            + "\n\\end{document}\n"
+        )
+    tex_path.write_text(tex_source, encoding="utf-8")
+
+    latex_args = [
+        "-interaction=nonstopmode",
+        "-halt-on-error",
+        "-file-line-error",
+        "diagram.tex",
+    ]
+    try:
+        subprocess.run(
+            [latex_engine, *latex_args],
+            cwd=work_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        subprocess.run(
+            [raster_cli, "-png", "-r", "300", "-singlefile", str(work_dir / "diagram.pdf"), str(output_image.with_suffix(""))],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"TikZ diagram {index} took too long to compile (over 2 minutes).") from exc
+    except subprocess.CalledProcessError as exc:
+        renderer_error = _latex_log_error(tex_path.with_suffix(".log")) or (
+            exc.stderr or exc.stdout or "LaTeX returned an unknown error."
+        ).strip()
+        raise RuntimeError(f"TikZ diagram {index} could not be compiled: {renderer_error}") from exc
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    if not output_image.exists() or output_image.stat().st_size == 0:
+        raise RuntimeError(f"TikZ diagram {index} did not produce a PNG file.")
+
+
+def render_tikz_blocks(markdown: str, job_dir: Path) -> str:
+    """Render TikZ/LaTeX fenced blocks to PNG files and replace them with images."""
+    matches = list(re.finditer(TIKZ_PATTERN, markdown, flags=re.IGNORECASE))
+    if not matches:
+        return markdown
+
+    rendered = markdown
+    for index, match in reversed(list(enumerate(matches, start=1))):
+        source = match.group(1).strip()
+        _compile_tikz_png(source, job_dir / f"tikz-{index}.png", index)
+        image_reference = f"![TikZ diagram](tikz-{index}.png)"
+        rendered = rendered[: match.start()] + image_reference + rendered[match.end() :]
+
+    return rendered
+
+
+@app.post("/api/render-tikz")
+def render_tikz_preview(payload: TikzPreviewRequest, _user=Depends(current_user)):
+    """Render one TikZ/LaTeX diagram source to a data-URL PNG for the live preview."""
+    with tempfile.TemporaryDirectory(prefix="mdtodocx-tikz-") as temp_dir:
+        output_image = Path(temp_dir) / "tikz.png"
+        try:
+            _compile_tikz_png(payload.source, output_image, 1)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        encoded = base64.b64encode(output_image.read_bytes()).decode("ascii")
+    return {"image": f"data:image/png;base64,{encoded}"}
+
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
@@ -549,13 +792,30 @@ def delete_note(note_id: int, user=Depends(current_user)):
     return {"status": "deleted"}
 
 
+@app.get("/api/reference-styles")
+def list_reference_styles(_user=Depends(current_user)):
+    """Available reference templates (docx file names in the references folder)."""
+    style_ids = available_reference_styles()
+    return {"styles": [{"id": style_id, "name": style_id} for style_id in style_ids]}
+
+
 @app.post("/api/export")
 def export_document(payload: ExportRequest, _user=Depends(current_user)):
     filename = Path(payload.filename).name
     if not filename.lower().endswith(".md"):
         filename += ".md"
+    style_ids = available_reference_styles()
+    if payload.reference not in style_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Unknown reference style. Available: " + ", ".join(style_ids),
+        )
     try:
-        output_path = convert_md_file(payload.markdown.encode("utf-8"), filename)
+        output_path = convert_md_file(
+            payload.markdown.encode("utf-8"),
+            filename,
+            resolve_reference_doc(payload.reference),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:

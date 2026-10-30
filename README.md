@@ -1,15 +1,17 @@
-# Mark→Word
+# MarkDoc
 
-A small Markdown editor that converts your writing to an editable `.docx` file with FastAPI, React, and Pandoc. It supports inline/display LaTeX (`$x^2$`, `\\(x^2\\)`, `$$x^2$$`, `\\[x^2\\]`), pipe tables, raw HTML tables, Mermaid diagrams, and Graphviz diagrams.
+A small Markdown editor that converts your writing to an editable `.docx` file with FastAPI, React, and Pandoc. It supports inline/display LaTeX (`$x^2$`, `\\(x^2\\)`, `$$x^2$$`, `\\[x^2\\]`), pipe tables, raw HTML tables, Mermaid diagrams, Graphviz diagrams, and TikZ/LaTeX diagrams.
 
 ## Requirements
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
-- Node.js 18+
+- Node.js 22.12+ (required by Mermaid CLI 12)
 - [Pandoc](https://pandoc.org/installing.html) installed and available on your PATH
-- Mermaid CLI installed and available on your PATH: `npm install --global @mermaid-js/mermaid-cli`
+- Mermaid CLI 12 installed and available on your PATH: `npm install --global @mermaid-js/mermaid-cli@12`
 - Graphviz installed with the `dot` command available on your PATH
+- TeX Live (with TikZ/pgfplots) installed with `xelatex` on your PATH: `apt install texlive-latex-extra texlive-pictures texlive-xetex`
+- Poppler installed with the `pdftoppm` command available on your PATH: `apt install poppler-utils`
 
 ## Run in development
 
@@ -66,6 +68,21 @@ digraph G {
 ````
 
 The browser renders Graphviz as an SVG image, while the DOCX contains a generated PNG image.
+
+Use a fenced `tikz`, `latex-diagram`, or `pgfplots` block for LaTeX/TikZ diagrams (the content may also be a complete LaTeX document with its own `\documentclass`):
+
+````markdown
+```tikz
+\begin{tikzpicture}
+  \draw[thick,fill=teal!20] (0,0) rectangle (2,1) node[midway] {TikZ};
+  \draw[->] (2.2,0.5) -- (4,0.5) node[midway,above] {DOCX};
+\end{tikzpicture}
+```
+````
+
+The browser shows the compiled diagram (rendered by the same server-side pdflatex engine used for export), while the DOCX contains a generated PNG image. Compile errors are shown in the preview and reported during export.
+
+TikZ diagrams must be self-contained: `\input`/`\include` of external `.tex` files is not supported, so paste the complete `tikzpicture` code into the fence. Everything from the `pgf`, `pgfplots`, and `pgfplotstable` packages that ships with TeX Live is available.
 
 ## Accounts and security
 

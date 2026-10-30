@@ -41,15 +41,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     texlive-latex-base \
     texlive-latex-recommended \
     texlive-latex-extra \
+    texlive-pictures \
     texlive-xetex \
     texlive-fonts-recommended \
     lmodern \
-    nodejs \
-    npm \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Install mermaid-cli globally
-RUN npm install -g @mermaid-js/mermaid-cli
+# Install Node.js 22 (mermaid-cli 12 requires Node 22.12+)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install mermaid-cli globally, pinned to major version 12 (Mermaid 12.x renderer)
+RUN npm install -g @mermaid-js/mermaid-cli@12
 
 # Cache Python dependencies
 COPY pyproject.toml uv.lock* ./
@@ -57,6 +62,7 @@ RUN uv sync --frozen --no-install-project --no-dev
 
 # Copy root backend files, puppeteer config, and built frontend assets
 COPY main.py reference.docx* puppeteer-config.json ./
+COPY references/ ./references/
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 # Install root project into the venv

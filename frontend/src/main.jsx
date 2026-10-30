@@ -7,7 +7,9 @@ import mermaid from 'mermaid'
 import { instance as createGraphviz } from '@viz-js/viz'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
+import { fromMarkdown } from 'mdast-util-from-markdown'
 import './styles.css'
+import { dslToLatex, SHORTCUTS, toMarkdownMath } from './eqShortcuts.js'
 
 // Register Markdown language with highlight.js if not already present
 if (!hljs.getLanguage('markdown')) {
@@ -47,8 +49,53 @@ function escapeHtml(value) {
   return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]) 
 }
 
+// CommonMark renders any line indented 4+ spaces as an indented code block,
+// which ambushes nested lists and mid-sentence alignment. All three layers
+// (Pandoc export via -indented_code_blocks, this preview, and the editor
+// overlay) treat indented text as plain text instead: real code must use
+// fenced ``` blocks. To keep the visual indentation the leading spaces become
+// non-breaking spaces -- except on list-item, blockquote, and fenced lines so
+// nested lists keep their structure.
+function normalizeIndentedCode(source) {
+  const rawBlocks = []
+  const protectedSource = source.replace(/```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)/g, (block) => {
+    rawBlocks.push(block)
+    return `\u0000RAW${rawBlocks.length - 1}\u0000`
+  })
+  const lines = protectedSource.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const run = lines[i].match(/^[\t ]+/)?.[0]
+    if (!run) continue
+    const rest = lines[i].slice(run.length)
+    if (!rest || /^(?:[-+*]\s|\d+[.)]\s|>\s?)/.test(rest) || rest.startsWith('<')) continue
+    // tab stops of 4: a tab advances to the next multiple of 4 columns
+    let columns = 0
+    for (const character of run) columns += character === '\t' ? 4 - (columns % 4) : 1
+    if (columns < 4) continue
+    lines[i] = '\u00A0'.repeat(columns) + rest
+  }
+  return lines.join('\n').replace(/\u0000RAW(\d+)\u0000/g, (_, index) => rawBlocks[Number(index)])
+}
+
 function renderMermaid(source) { 
-  return source.replace(/```mermaid\s*\n([\s\S]*?)\n```/gi, (_, diagram) => `<div class="mermaid">${escapeHtml(diagram.trim())}</div>`) 
+  // Newlines (incl. blank lines) are sentineled: marked's raw-HTML block token ends
+  // at the first blank line, which would re-parse the diagram's remaining lines as
+  // markdown (indented lines become <pre><code> blocks) and pollute mermaid's input.
+  // The sentinel is restored after marked.parse in the preview pipeline.
+  return source.replace(/```mermaid\s*\n([\s\S]*?)\n```/gi, (_, diagram) => `<div class="mermaid">${escapeHtml(diagram.trim()).replace(/\n/g, '\u0001')}</div>`) 
+}
+
+// Cheatsheet: render each shortcut's LaTeX output as visual math (KaTeX) instead of raw text.
+// Placeholder "…" entries become \dots; purely word outputs are wrapped in \text so spaces survive.
+function renderShortcutOutput(out) {
+  if (!out) return ''
+  const isPlain = !out.includes('\\')
+  const source = isPlain ? `\\text{${out}}` : out.replace(/…/g, '\\dots')
+  try {
+    return katex.renderToString(source, { throwOnError: false })
+  } catch {
+    return escapeHtml(out)
+  }
 }
 
 function renderGraphviz(source, diagrams) {
@@ -58,6 +105,16 @@ function renderGraphviz(source, diagrams) {
     return rendered
       ? `<div class="graphviz-diagram">${rendered}</div>`
       : '```dot\n' + diagram + '\n```'
+  })
+}
+
+function renderTikz(source, diagrams) {
+  let index = 0
+  return source.replace(/```(?:tikz|latex-diagram|pgfplots)\s*\n([\s\S]*?)\n```/gi, (_, diagram) => {
+    const rendered = diagrams[index++]
+    if (!rendered) return '```tikz\n' + diagram + '\n```'
+    if (rendered.image) return `<div class="tikz-diagram"><img src="${rendered.image}" alt="TikZ diagram" /></div>`
+    return `<div class="tikz-diagram tikz-error"><code>${escapeHtml(rendered.error || 'This TikZ diagram could not be rendered.')}</code></div>`
   })
 }
 
@@ -71,9 +128,96 @@ markdownRenderer.code = ({ text, lang }) => {
   return `<pre><code class="hljs${languageClass}">${highlighted}</code></pre>`
 }
 
+// Brand lockup from the SVG assets in frontend/public: logo mark + wordmark.
+// Both theme variants are rendered; CSS picks the visible one per data-theme.
+function Brand() {
+  return (
+    <div className="brand">
+      <img className="brand-logo visible-light" src="/markdoc-logo-light.svg" alt="" aria-hidden="true" />
+      <img className="brand-logo visible-dark" src="/markdoc-logo-dark.svg" alt="" aria-hidden="true" />
+      <img className="brand-wordmark visible-light" src="/markdoc-branding-light.svg" alt="MarkDoc" />
+      <img className="brand-wordmark visible-dark" src="/markdoc-branding-dark.svg" alt="MarkDoc" />
+    </div>
+  )
+}
+
 const DRAFT_KEY = 'mdtodocx-draft'
 function readDraft() {
   try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null') } catch { return null }
+}
+
+// Editor backdrop (syntax layer) highlighting is driven by mdast-util-from-markdown
+// (the CommonMark/micromark parser used by remark) instead of hand-rolled text
+// matching. It reports exact character offsets for each markdown construct, so the
+// overlay always aligns with the textarea, and `_italic_` follows real CommonMark
+// rules: `one_book` (intraword), `_ word` / `word _` and unmatched lone underscores
+// never italicize, while genuine `_word_` pairs do -- a stray `_` can no longer
+// sweep the rest of the document into an italic span.
+const MDAST_CLASSES = {
+  heading: 'hljs-section',
+  code: 'hljs-code',
+  inlineCode: 'hljs-code',
+  emphasis: 'hljs-emphasis',
+  strong: 'hljs-strong',
+  blockquote: 'hljs-quote',
+  thematicBreak: 'hljs-bullet',
+  link: 'hljs-link',
+  image: 'hljs-link',
+  html: 'hljs-comment',
+}
+const MATH_SPANS_RE = /(\$\$[\s\S]*?\$\$)|(\\\[([\s\S]*?)\\\])|(\\\((.+?)\\\))|((?<!\\)\$[^\n$]+?\$)/g
+
+function markdownClassMap(source) {
+  const classes = new Array(source.length).fill(null)
+  const addRange = (start, end, cls) => {
+    start = Math.max(0, start)
+    end = Math.min(source.length, end)
+    for (let i = start; i < end; i++) (classes[i] ||= []).push(cls)
+  }
+  const codeRanges = []
+  const walk = (node) => {
+    if (node.position) {
+      const { start, end } = node.position
+      let cls = MDAST_CLASSES[node.type]
+      // Fenced blocks (```/~~~, optionally indented <=3 spaces) are real code;
+      // indented code blocks are disabled app-wide, so leave them plain text.
+      if (node.type === 'code' && !/^\s{0,3}(?:```|~~~)/.test(source.slice(start.offset, end.offset))) {
+        cls = null
+      }
+      if (cls) addRange(start.offset, end.offset, cls)
+      if ((node.type === 'code' && cls) || node.type === 'inlineCode') codeRanges.push([start.offset, end.offset])
+      if (node.type === 'listItem') {
+        // color only the bullet / ordered marker (plus its trailing spaces)
+        const first = node.children?.[0]
+        if (first?.position) addRange(start.offset, first.position.start.offset, 'hljs-bullet')
+      }
+    }
+    for (const child of node.children ?? []) walk(child)
+  }
+  walk(fromMarkdown(source))
+  // LaTeX math sweep: keep the cyan math layer, but never inside code spans/fences
+  for (const match of source.matchAll(MATH_SPANS_RE)) {
+    const start = match.index
+    const end = match.index + match[0].length
+    if (codeRanges.some(([s, e]) => start < e && s < end)) continue
+    addRange(start, end, 'hljs-math')
+  }
+  return classes
+}
+
+function renderBackdropHtml(source) {
+  const classes = markdownClassMap(source)
+  let html = ''
+  let i = 0
+  while (i < source.length) {
+    const key = classes[i] ? [...classes[i]].sort().join(' ') : null
+    let j = i + 1
+    while (j < source.length && (classes[j] ? [...classes[j]].sort().join(' ') : null) === key) j++
+    const chunk = escapeHtml(source.slice(i, j))
+    html += key ? `<span class="${key}">${chunk}</span>` : chunk
+    i = j
+  }
+  return html
 }
 
 /**
@@ -82,12 +226,11 @@ function readDraft() {
 function MarkdownCodeEditor({ value, onChange, onScrollSync, editorRef }) {
   const backdropRef = useRef(null)
 
-  // Highlight markdown syntax using highlight.js
+  // Highlight markdown syntax via the CommonMark AST (exact-offset overlay)
   const highlightedCode = useMemo(() => {
     try {
-      const res = hljs.highlight(value || '', { language: 'markdown', ignoreIllegals: true })
-      // Append newline to match textarea height trailing behavior
-      return res.value + (value.endsWith('\n') ? ' ' : '')
+      const raw = value || ''
+      return renderBackdropHtml(raw) + (raw.endsWith('\n') ? ' ' : '')
     } catch {
       return escapeHtml(value || '')
     }
@@ -103,6 +246,59 @@ function MarkdownCodeEditor({ value, onChange, onScrollSync, editorRef }) {
     }
   }
 
+  // Tab inserts 4 spaces (safe everywhere: indented code blocks are disabled
+  // app-wide). With a multi-line selection, Tab/Shift+Tab indent or outdent
+  // every touched line. setRangeText + a synthetic input event keeps React
+  // state (and the syntax overlay) in sync.
+  const handleTabKey = (event) => {
+    if (event.key !== 'Tab') return
+    event.preventDefault()
+    const ta = event.currentTarget
+    const { value, selectionStart, selectionEnd } = ta
+    const indent = '    '
+
+    const insertSpaces = () => {
+      ta.focus()
+      if (!document.execCommand('insertText', false, indent)) {
+        ta.setRangeText(indent, selectionStart, selectionEnd, 'end')
+        ta.dispatchEvent(new Event('input', { bubbles: true }))
+      }
+    }
+
+    const blockMode = event.shiftKey || value.slice(selectionStart, selectionEnd).includes('\n')
+    if (!blockMode) {
+      insertSpaces()
+      return
+    }
+
+    const rangeStart = value.lastIndexOf('\n', selectionStart - 1) + 1
+    let rangeEnd = value.indexOf('\n', Math.max(selectionEnd - 1, selectionStart))
+    if (rangeEnd === -1) rangeEnd = value.length
+    const lines = value.slice(rangeStart, rangeEnd).split('\n')
+    const deltas = lines.map((line) => (event.shiftKey
+      ? -(line.match(/^(?: {1,4}|\t)/)?.[0]?.length ?? 0)
+      : indent.length))
+    const replacement = (event.shiftKey
+      ? lines.map((line) => line.replace(/^(?: {1,4}|\t)/, ''))
+      : lines.map((line) => indent + line)
+    ).join('\n')
+
+    const lineStarts = []
+    let acc = rangeStart
+    for (const line of lines) { lineStarts.push(acc); acc += line.length + 1 }
+    const mapOffset = (offset) => {
+      let corrected = offset
+      for (let i = 0; i < lines.length; i++) {
+        if (offset >= lineStarts[i]) corrected += deltas[i]
+      }
+      return Math.max(0, corrected)
+    }
+
+    ta.setRangeText(replacement, rangeStart, rangeEnd, 'end')
+    ta.setSelectionRange(mapOffset(selectionStart), mapOffset(selectionEnd))
+    ta.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+
   return (
     <div className="syntax-editor-container">
       {/* Visual highlighted layer */}
@@ -116,6 +312,7 @@ function MarkdownCodeEditor({ value, onChange, onScrollSync, editorRef }) {
         value={value}
         onChange={onChange}
         onScroll={handleScroll}
+        onKeyDown={handleTabKey}
         spellCheck="false"
         autoCapitalize="off"
         autoComplete="off"
@@ -123,6 +320,135 @@ function MarkdownCodeEditor({ value, onChange, onScrollSync, editorRef }) {
         placeholder="Start writing Markdown…"
       />
     </div>
+  )
+}
+
+function EquationHelper({ onInsert, onClose }) {
+  const [shortcut, setShortcut] = useState('frac(1,n) sum(i=1..n, x_i)')
+  const [minimized, setMinimized] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
+  const [mode, setMode] = useState('inline')
+  const [pos, setPos] = useState({ x: 0, y: 0 })
+  const [dragging, setDragging] = useState(false)
+  const [dragOff, setDragOff] = useState({ x: 0, y: 0 })
+  const [copied, setCopied] = useState('')
+  const cardRef = useRef(null)
+
+  const latex = useMemo(() => {
+    try { return dslToLatex(shortcut) } catch { return shortcut }
+  }, [shortcut])
+  const wrapped = useMemo(() => {
+    if (!latex) return ''
+    return mode === 'inline' ? `\\(${latex}\\)` : `\\[${latex}\\]`
+  }, [latex, mode])
+  const markdownBlock = useMemo(() => toMarkdownMath(latex, true), [latex])
+
+  const previewHtml = useMemo(() => {
+    if (!latex) return '<span class="eq-empty">Type a shortcut on the left…</span>'
+    try { return katex.renderToString(latex, { displayMode: true, throwOnError: false }) } catch { return '<span class="eq-error">Could not render</span>' }
+  }, [latex])
+
+  function copy(text, key) {
+    navigator.clipboard.writeText(text).then(() => { setCopied(key); setTimeout(() => setCopied(''), 1500) }).catch(() => {})
+  }
+
+  function onMouseDown(e) {
+    // only drag via header
+    const rect = cardRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setDragging(true)
+    setDragOff({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+  }
+  useEffect(() => {
+    if (!dragging) return
+    function move(e) { setPos({ x: e.clientX - dragOff.x, y: e.clientY - dragOff.y }) }
+    function up() { setDragging(false) }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+  }, [dragging, dragOff])
+
+  // clamp position if user drags offscreen? keep simple
+
+  return (
+    <>
+      <div
+        ref={cardRef}
+        className={`eq-float ${minimized ? 'is-min' : ''} ${dragging ? 'is-dragging' : ''}`}
+        style={pos.x || pos.y ? { left: pos.x, top: pos.y, right: 'auto', bottom: 'auto' } : undefined}
+      >
+        <div className="eq-head" onMouseDown={onMouseDown}>
+          <span className="eq-title"><span className="eq-logo">∑</span> Equation Studio</span>
+          <span className="eq-head-actions">
+            <button className="eq-icon" title="Show shortcuts" onClick={() => setShowHelp(v => !v)} aria-label="Shortcuts info">ⓘ</button>
+            <button className="eq-icon" title={minimized ? 'Expand' : 'Minimise'} onClick={() => setMinimized(v => !v)}>{minimized ? '▢' : '—'}</button>
+            <button className="eq-icon eq-close" title="Hide equation studio" onClick={() => onClose?.()}>✕</button>
+          </span>
+        </div>
+
+        {!minimized && (
+          <div className="eq-body">
+            <div className="eq-split">
+              <div className="eq-pane eq-input-pane">
+                <div className="eq-pane-head">Shortcut <small>ML DSL</small></div>
+                <textarea
+                  value={shortcut}
+                  onChange={e => setShortcut(e.target.value)}
+                  placeholder="Try: grad(L,w)  or  norm(x,2)  or  mat[1 2&#10;3 4]"
+                  spellCheck={false}
+                />
+                <div className="eq-hint">Examples: <button onClick={() => setShortcut('partial(L, w)')}>partial(L,w)</button> <button onClick={() => setShortcut('grad(J,w)')}>grad(J,w)</button> <button onClick={() => setShortcut('mat[\n1 2\n3 4\n]')}>mat[...]</button></div>
+              </div>
+              <div className="eq-pane eq-preview-pane">
+                <div className="eq-pane-head">Preview <small>KaTeX</small></div>
+                <div className="eq-preview" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                <div className="eq-raw-wrap">
+                  <div className="eq-mode">
+                    <button className={`eq-mode-btn ${mode === 'inline' ? 'is-active' : ''}`} onClick={() => setMode('inline')} title="Inline math \(...\)">Inline \( \)</button>
+                    <button className={`eq-mode-btn ${mode === 'block' ? 'is-active' : ''}`} onClick={() => setMode('block')} title="Display math \[...\]">Block \[ \]</button>
+                    <span className="eq-mode-hint">{mode === 'inline' ? 'inline' : 'display'}</span>
+                  </div>
+                  <div className="eq-raw-head">
+                    <span>LaTeX</span>
+                    <span className="eq-raw-actions">
+                      <button className="eq-copy" onClick={() => copy(latex, 'latex')}>{copied === 'latex' ? '✓ Copied' : 'Raw'}</button>
+                      <button className="eq-copy primary" onClick={() => copy(wrapped, 'wrapped')}>{copied === 'wrapped' ? '✓ Copied' : mode === 'inline' ? 'Copy \\( \\)' : 'Copy \\[ \\]'}</button>
+                    </span>
+                  </div>
+                  <pre className="eq-raw"><code>{wrapped || '—'}</code></pre>
+                  {onInsert && <button className="eq-insert" onClick={() => onInsert(wrapped)}>Insert {mode === 'inline' ? 'inline' : 'block'} into editor ↓</button>}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {showHelp && (
+        <div className="eq-help-backdrop" onClick={() => setShowHelp(false)}>
+          <div className="eq-help" onClick={e => e.stopPropagation()}>
+            <div className="eq-help-head">
+              <h3>Shortcut cheatsheet</h3>
+              <button className="eq-icon" onClick={() => setShowHelp(false)}>✕</button>
+            </div>
+            <p className="eq-help-sub">Type the shortcut on the left, see the rendered result on the right. Hover an output to reveal its raw LaTeX.</p>
+            <div className="eq-help-grid">
+              {SHORTCUTS.map(s => (
+                <div key={s.in} className="eq-help-row">
+                  <code>{s.in}</code>
+                  <span>→</span>
+                  <code className="eq-help-out" title={s.out} dangerouslySetInnerHTML={{ __html: renderShortcutOutput(s.out) }} />
+                  <small>{s.desc}</small>
+                </div>
+              ))}
+            </div>
+            <div className="eq-help-foot">
+              <small>Tip: choose <code>Inline \(...\)</code> for in-text math or <code>Block \[...\]</code> for display. Copied text is ready to paste into Markdown and the Insert button drops it at your cursor.</small>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
@@ -148,7 +474,7 @@ function AuthScreen({ onLogin }) {
       onLogin(body)
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
-  return <main className="auth-shell"><div className="auth-card"><div className="brand"><span className="brand-mark">M</span><span>Mark<span className="accent">→</span>Word</span></div><p className="eyebrow">PRIVATE MARKDOWN WORKSPACE</p><h1>{registering ? 'Create your account.' : 'Welcome back.'}</h1><p className="auth-copy">{registering ? 'Use your email to create a private workspace password.' : 'Enter your email to continue.'}</p>{emailKnown === null && !registering ? <form onSubmit={checkEmail}><label>EMAIL<input value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" inputMode="email" required /></label>{error && <div className="error">{error}</div>}<button className="export auth-submit" disabled={busy}>{busy ? 'Checking...' : 'Continue'}</button></form> : <form onSubmit={submit}><label>EMAIL<input value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" inputMode="email" required /></label><label>PASSWORD<span className="password-wrap"><input type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} autoComplete={registering ? 'new-password' : 'current-password'} minLength="10" required /><button type="button" className="show-password" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? 'Hide' : 'Show'}</button></span><small>At least 10 characters</small></label>{error && <div className="error">{error}</div>}<button className="export auth-submit" disabled={busy}>{busy ? 'Working...' : registering ? 'Create account' : 'Log in'}</button></form>}<button className="auth-switch" onClick={() => { setRegistering(v => !v); setEmailKnown(null); setPassword(''); setError('') }}>{registering ? 'Already have an account? Log in' : 'Need an account? Register'}</button></div></main>
+  return <main className="auth-shell"><div className="auth-card"><Brand /><p className="eyebrow">PRIVATE MARKDOWN WORKSPACE</p><h1>{registering ? 'Create your account.' : 'Welcome back.'}</h1><p className="auth-copy">{registering ? 'Use your email to create a private workspace password.' : 'Enter your email to continue.'}</p>{emailKnown === null && !registering ? <form onSubmit={checkEmail}><label>EMAIL<input value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" inputMode="email" required /></label>{error && <div className="error">{error}</div>}<button className="export auth-submit" disabled={busy}>{busy ? 'Checking...' : 'Continue'}</button></form> : <form onSubmit={submit}><label>EMAIL<input value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" inputMode="email" required /></label><label>PASSWORD<span className="password-wrap"><input type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} autoComplete={registering ? 'new-password' : 'current-password'} minLength="8" required /><button type="button" className="show-password" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? 'Hide' : 'Show'}</button></span><small>At least 8 characters</small></label>{error && <div className="error">{error}</div>}<button className="export auth-submit" disabled={busy}>{busy ? 'Working...' : registering ? 'Create account' : 'Log in'}</button></form>}<button className="auth-switch" onClick={() => { setRegistering(v => !v); setEmailKnown(null); setPassword(''); setError('') }}>{registering ? 'Already have an account? Log in' : 'Need an account? Register'}</button></div></main>
 }
 
 function AdminPanel({ onClose }) {
@@ -175,17 +501,22 @@ function App() {
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('mdtodocx-theme') === 'dark')
   const [adminOpen, setAdminOpen] = useState(false)
   const [graphvizDiagrams, setGraphvizDiagrams] = useState([])
+  const [tikzDiagrams, setTikzDiagrams] = useState([])
+  const [eqOpen, setEqOpen] = useState(true)
+  const [reference, setReference] = useState(() => readDraft()?.reference ?? 'Default')
+  const [referenceStyles, setReferenceStyles] = useState([{ id: 'Default', name: 'Default' }])
   const editorRef = useRef(null)
   const previewRef = useRef(null)
+  const tikzCacheRef = useRef(new Map())
   const preview = useMemo(() => ({
-    __html: marked.parse(renderMath(renderMermaid(renderGraphviz(markdown, graphvizDiagrams))), { renderer: markdownRenderer })
-  }), [markdown, graphvizDiagrams])
+    __html: marked.parse(renderMath(renderTikz(renderMermaid(renderGraphviz(normalizeIndentedCode(markdown)), tikzDiagrams))), { renderer: markdownRenderer }).replace(/\u0001/g, '\n')
+  }), [markdown, graphvizDiagrams, tikzDiagrams])
 
   useEffect(() => { fetch('/api/auth/me').then(response => response.ok ? response.json() : null).then(value => { setUser(value); setAuthChecked(true) }).catch(() => setAuthChecked(true)) }, [])
-  useEffect(() => { if (user) loadNotes() }, [user])
+  useEffect(() => { if (user) { loadNotes(); loadStyles() } }, [user])
   useEffect(() => {
-    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ markdown, filename, noteId, saved })) } catch { /* local draft storage is optional */ }
-  }, [markdown, filename, noteId, saved])
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ markdown, filename, noteId, saved, reference })) } catch { /* local draft storage is optional */ }
+  }, [markdown, filename, noteId, saved, reference])
   useEffect(() => {
     document.documentElement.dataset.theme = darkMode ? 'dark' : 'light'
     localStorage.setItem('mdtodocx-theme', darkMode ? 'dark' : 'light')
@@ -216,6 +547,50 @@ function App() {
     return () => { cancelled = true }
   }, [markdown])
   useEffect(() => {
+    let cancelled = false
+    const blocks = [...markdown.matchAll(/```(?:tikz|latex-diagram|pgfplots)\s*\n([\s\S]*?)\n```/gi)]
+    const sources = blocks.map(([, source]) => source.trim())
+    // Empty fences never need the server; seed the cache locally.
+    const EMPTY_TIKZ = { error: 'This TikZ fence is empty.' }
+    sources.forEach(source => { if (!source) tikzCacheRef.current.set(source, EMPTY_TIKZ) })
+    const diagrams = sources.map(source => tikzCacheRef.current.get(source) ?? null)
+    if (!sources.length) {
+      setTikzDiagrams([])
+      return () => { cancelled = true }
+    }
+    if (diagrams.every(Boolean)) {
+      setTikzDiagrams(diagrams)
+      return () => { cancelled = true }
+    }
+    // TikZ compiles on the server (slow), so preview fetches are debounced and
+    // cached per source until the code changes. Errors are cached too, mapped
+    // to the same fence position on every keystroke.
+    const timer = setTimeout(() => {
+      Promise.all(sources.map(async (source) => {
+        const cached = tikzCacheRef.current.get(source)
+        if (cached) return cached
+        try {
+          const response = await fetch('/api/render-tikz', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source }),
+          })
+          const data = await response.json().catch(() => null)
+          const value = response.ok && data?.image
+            ? { image: data.image }
+            : { error: typeof data?.detail === 'string' && data.detail ? data.detail : 'This TikZ diagram could not be rendered.' }
+          tikzCacheRef.current.set(source, value)
+          return value
+        } catch {
+          const value = { error: 'Could not reach the server to render this TikZ diagram.' }
+          tikzCacheRef.current.set(source, value)
+          return value
+        }
+      })).then(values => { if (!cancelled) setTikzDiagrams(values) })
+    }, 700)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [markdown])
+  useEffect(() => {
     const onKeyDown = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); exportDoc() }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); saveNote() }
@@ -225,8 +600,30 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [markdown, filename, noteId])
 
+  function insertEq(block) {
+    const ta = editorRef.current
+    const start = ta ? ta.selectionStart : markdown.length
+    const end = ta ? ta.selectionEnd : markdown.length
+    const before = markdown.slice(0, start)
+    const after = markdown.slice(end)
+    const needsNl = before && !before.endsWith('\n') ? '\n' : ''
+    const next = `${before}${needsNl}${block}\n${after}`
+    setMarkdown(next); setSaved(false)
+    setTimeout(() => { if (ta) { const p = (before + needsNl + block + '\n').length; ta.focus(); ta.setSelectionRange(p, p) } }, 0)
+  }
   async function loadNotes() {
     try { const response = await fetch('/api/notes'); if (response.ok) setNotes(await response.json()) } catch { /* offline UI still works */ }
+  }
+  async function loadStyles() {
+    try {
+      const response = await fetch('/api/reference-styles')
+      if (!response.ok) return
+      const data = await response.json()
+      if (data.styles?.length) {
+        setReferenceStyles(data.styles)
+        setReference(prev => data.styles.some(style => style.id === prev) ? prev : data.styles[0].id)
+      }
+    } catch { /* offline UI still works */ }
   }
   function newDocument() { setMarkdown(''); setFilename('untitled'); setNoteId(null); setSaved(false); setError('') }
   function openDocument(item) { setMarkdown(item.markdown); setFilename(item.title.replace(/\.md$/i, '')); setNoteId(item.note_id || item.id); setSaved(true); setError('') }
@@ -252,7 +649,7 @@ function App() {
   async function exportDoc() {
     setBusy(true); setError('')
     try {
-      const response = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ markdown, filename: `${filename || 'document'}.md` }) })
+      const response = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ markdown, filename: `${filename || 'document'}.md`, reference }) })
       if (!response.ok) { const body = await response.json(); throw new Error(body.detail || 'Export failed') }
       const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `${filename || 'document'}.docx`; link.click(); URL.revokeObjectURL(url)
     } catch (e) { setError(e.message) } finally { setBusy(false) }
@@ -272,8 +669,8 @@ function App() {
   async function signOut() { await fetch('/api/auth/logout', { method: 'POST' }); setUser(null); setNotes([]) }
 
   return <main className={`shell ${maximized ? 'is-maximized' : ''}`}>
-    <header className="topbar"><div className="brand"><span className="brand-mark">M</span><span>Mark<span className="accent">→</span>Word</span></div><div className="top-actions"><span className="welcome">{user.email || user.username}</span>{user.is_admin && <button className="secondary" onClick={() => setAdminOpen(true)}>Admin</button>}<span className="status"><i /> {saved ? 'Saved to notes' : 'Unsaved changes'}</span><button className="theme-toggle" onClick={() => setDarkMode(v => !v)} title="Toggle dark mode">{darkMode ? '☀ Light' : '☾ Dark'}</button><button className="secondary" onClick={signOut}>Log out</button><button className="secondary" onClick={saveNote} disabled={busy}>＋ Save note</button><button className="export" onClick={exportDoc} disabled={busy || !markdown.trim()}><span>↓</span>{busy ? 'Working…' : 'Export to Word'}</button></div></header>
-    <section className="intro"><div><p className="eyebrow">MARKDOWN DOCUMENT STUDIO</p><h1>From plain text<br /><em>to polished pages.</em></h1><p className="subtitle">A focused writing space for turning Markdown into beautiful, editable Word documents.</p></div><div className="doc-info"><label>DOCUMENT NAME<input value={filename} onChange={e => { setFilename(e.target.value); setSaved(false) }} /><small>.docx</small></label><p>Supports headings, lists, tables, code, links, and LaTeX math.</p></div></section>
+    <header className="topbar"><Brand /><div className="top-actions"><span className="welcome">{user.email || user.username}</span>{user.is_admin && <button className="secondary" onClick={() => setAdminOpen(true)}>Admin</button>}<span className="status"><i /> {saved ? 'Saved to notes' : 'Unsaved changes'}</span><button className="secondary" onClick={() => setEqOpen(v => !v)} title="Equation helper">{eqOpen ? '∑ Hide eq' : '∑ Equations'}</button><button className="theme-toggle" onClick={() => setDarkMode(v => !v)} title="Toggle dark mode">{darkMode ? '☀ Light' : '☾ Dark'}</button><button className="secondary" onClick={signOut}>Log out</button><button className="secondary" onClick={saveNote} disabled={busy}>＋ Save note</button><button className="export" onClick={exportDoc} disabled={busy || !markdown.trim()}><span>↓</span>{busy ? 'Working…' : 'Export to Word'}</button></div></header>
+    <section className="intro"><div><p className="eyebrow">MARKDOWN DOCUMENT STUDIO</p><h1>From plain text<br /><em>to polished pages.</em></h1><p className="subtitle">A focused writing space for turning Markdown into beautiful, editable Word documents.</p></div><div className="doc-info"><label>DOCUMENT NAME<input value={filename} onChange={e => { setFilename(e.target.value); setSaved(false) }} /><small>.docx</small></label><div className="doc-row"><span className="doc-info-label">REFERENCE STYLE</span><span className="style-row">{referenceStyles.map(style => <button key={style.id} type="button" className={`style-chip${reference === style.id ? ' is-active' : ''}`} onClick={() => setReference(style.id)} title={`Export using ${style.id}.docx template`}>{style.name}</button>)}</span></div><p>Supports headings, lists, tables, code, links, and LaTeX math.</p></div></section>
     <section className="app-area">
       <aside className="sidebar"><button className="new-doc" onClick={newDocument}>＋ New markdown</button><div className="sidebar-tabs"><span>Notes</span><span>{notes.length}</span></div><div className="side-list">{notes.map(item => <div className="side-item" key={item.id}><button className="side-open" onClick={() => openDocument(item)}><strong>{item.title}</strong><small>{new Date(`${item.updated_at}Z`).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</small></button><button className="delete-note" onClick={e => deleteNote(e, item.id)} title="Delete note" aria-label={`Delete ${item.title}`}>×</button></div>)}{!notes.length && <p className="empty">No notes yet.</p>}</div></aside>
       
@@ -316,6 +713,8 @@ function App() {
       </div>
     </section>
     {error && <div className="error">{error}</div>}{adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}
+    {eqOpen && <EquationHelper onInsert={insertEq} onClose={() => setEqOpen(false)} />}
+    {!eqOpen && <button className="eq-fab" onClick={() => setEqOpen(true)} title="Open Equation Studio">∑ fx</button>}
     <footer><span>⌘ Enter to export · Esc to exit maximize</span><span>Powered by FastAPI + Pandoc + SQLite</span></footer>
   </main>
 }

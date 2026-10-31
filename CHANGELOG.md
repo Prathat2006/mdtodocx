@@ -2,6 +2,18 @@
 
 All notable changes to MarkDoc are documented here. Releases use the `vMAJOR.MINOR.PATCH` Git tag format. GitHub Release pages are the canonical place to download desktop installers.
 
+## [1.0.4] - 2026-10-31
+
+### Fixed
+
+- Node.js setup recognizes the current `win-x64-zip` release asset and safely captures its version output.
+
+### Release assets
+
+- `MarkDoc_1.0.4_x64-setup.exe` — NSIS installer.
+- `MarkDoc_1.0.4_x64_en-US.msi` — Windows Installer package.
+
+[1.0.4]: https://github.com/Prathat2006/MarkDoc/releases/tag/v1.0.4
 ## [1.0.3] - 2026-10-31
 
 ### Fixed

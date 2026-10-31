@@ -289,8 +289,8 @@ function Test-MermaidRuntime {
     if (-not $mmdc -or -not $node -or -not (Find-AppBrowser)) {
         return $false
     }
-    $nodeVersion = & $node --version 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v(\d+\.\d+\.\d+)') {
+    $nodeProbe = Get-NativeCommandOutput -Executable $node -Argument "--version"
+    if ($nodeProbe.ExitCode -ne 0 -or $nodeProbe.Output -notmatch '(?m)^v(\d+\.\d+\.\d+)') {
         return $false
     }
     return ([version]$Matches[1] -ge [version]"22.13.0")
@@ -305,7 +305,7 @@ function Install-MermaidRuntime {
         $nodeReleases = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json"
         $nodeRelease = $nodeReleases |
             Where-Object {
-                $_.version -match '^v22\.' -and $_.files -contains "win-x64"
+                $_.version -match '^v22\.' -and $_.files -contains "win-x64-zip"
             } |
             Select-Object -First 1
         if (-not $nodeRelease) {

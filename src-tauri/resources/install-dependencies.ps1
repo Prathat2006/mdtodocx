@@ -341,9 +341,31 @@ function Install-MermaidRuntime {
             Copy-Item -Destination $mermaidRoot -Recurse -Force
 
         $node = Join-Path $mermaidRoot "node.exe"
-        $npmCli = Join-Path $mermaidRoot "node_modules\npm\bin\npm-cli.js"
+        # The npm tree inside the Node.js ZIP can omit package metadata and
+        # node-gyp files. Fetch the complete official npm package and verify
+        # its registry-published SHA-512 integrity before extracting it.
+        $npmRelease = Invoke-RestMethod -Uri "https://registry.npmjs.org/npm/10.9.4"
+        if ($npmRelease.dist.integrity -notmatch '^sha512-(.+)$') {
+            throw "The npm registry did not provide a SHA-512 integrity value for npm 10.9.4."
+        }
+        $expectedNpmIntegrity = $Matches[1]
+        $npmArchive = Join-Path $downloadDirectory "npm-10.9.4.tgz"
+        Invoke-WebRequest -UseBasicParsing -Uri $npmRelease.dist.tarball -OutFile $npmArchive
+        $actualNpmIntegrity = [Convert]::ToBase64String(
+            [Security.Cryptography.SHA512]::Create().ComputeHash([IO.File]::ReadAllBytes($npmArchive))
+        )
+        if ($actualNpmIntegrity -ne $expectedNpmIntegrity) {
+            throw "The downloaded npm package failed its SHA-512 integrity verification."
+        }
+        $npmPackageRoot = Join-Path $downloadDirectory "npm-package"
+        New-Item -ItemType Directory -Path $npmPackageRoot -Force | Out-Null
+        & tar.exe -xzf $npmArchive -C $npmPackageRoot
+        if ($LASTEXITCODE -ne 0) {
+            throw "The verified npm package could not be extracted."
+        }
+        $npmCli = Join-Path $npmPackageRoot "package\bin\npm-cli.js"
         if (-not (Test-Path -LiteralPath $npmCli -PathType Leaf)) {
-            throw "The Node.js archive did not contain npm's command-line entry point."
+            throw "The verified npm package did not contain npm's command-line entry point."
         }
         $previousBrowserCache = $env:PUPPETEER_CACHE_DIR
         $env:PUPPETEER_CACHE_DIR = Join-Path $toolsRoot "chromium"

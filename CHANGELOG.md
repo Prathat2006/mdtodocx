@@ -2,6 +2,18 @@
 
 All notable changes to MarkDoc are documented here. Releases use the `vMAJOR.MINOR.PATCH` Git tag format. GitHub Release pages are the canonical place to download desktop installers.
 
+## [1.0.5] - 2026-10-31
+
+### Fixed
+
+- Mermaid setup installs a complete integrity-verified npm package instead of using the incomplete npm tree in the Node.js ZIP.
+
+### Release assets
+
+- `MarkDoc_1.0.5_x64-setup.exe` — NSIS installer.
+- `MarkDoc_1.0.5_x64_en-US.msi` — Windows Installer package.
+
+[1.0.5]: https://github.com/Prathat2006/MarkDoc/releases/tag/v1.0.5
 ## [1.0.4] - 2026-10-31
 
 ### Fixed

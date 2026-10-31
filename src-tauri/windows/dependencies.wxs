@@ -19,7 +19,7 @@
             ExeCommand="[CustomActionData]"
             Execute="deferred"
             Impersonate="no"
-            Return="ignore" />
+            Return="check" />
 
         <InstallExecuteSequence>
             <Custom Action="SetMarkDocDependencySetup" After="InstallFiles">NOT Installed</Custom>

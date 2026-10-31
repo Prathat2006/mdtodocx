@@ -1,7 +1,20 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to MarkDoc are documented here. Releases use the `vMAJOR.MINOR.PATCH` Git tag format. GitHub Release pages are the canonical place to download desktop installers.
 
+## [1.0.1] - 2026-10-31
+
+### Fixed
+
+- MiKTeX setup verifies the official archive SHA-256 because its setup utility is unsigned.
+- The MSI now fails when dependency setup fails.
+
+### Release assets
+
+- `MarkDoc_1.0.1_x64-setup.exe` — NSIS installer.
+- `MarkDoc_1.0.1_x64_en-US.msi` — Windows Installer package.
+
+[1.0.1]: https://github.com/Prathat2006/mdtodocx/releases/tag/v1.0.1
 ## [1.0.0] - 2026-10-31
 
 ### Added

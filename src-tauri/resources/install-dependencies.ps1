@@ -418,17 +418,20 @@ function Install-PortableMiKTeX {
         Write-Status "A complete TeX toolchain was not found. Downloading the official MiKTeX setup utility."
         $setupArchive = Join-Path $downloadDirectory "miktexsetup-x64.zip"
         Invoke-WebRequest -UseBasicParsing -Uri "https://miktex.org/download/win/miktexsetup-x64.zip" -OutFile $setupArchive
+        # MiKTeX publishes the setup utility archive with a SHA-256 digest on
+        # its official download page. The standalone EXE itself is unsigned,
+        # so Authenticode cannot be used to validate it.
+        $expectedDigest = "0571e90f6d94353089b4f189fd82a532f9fe559a388c7e7f1102b14b3c1ae27d"
+        $actualDigest = (Get-FileHash -LiteralPath $setupArchive -Algorithm SHA256).Hash
+        if ($actualDigest -ne $expectedDigest) {
+            throw "The downloaded MiKTeX setup archive failed its SHA-256 verification."
+        }
         Expand-Archive -LiteralPath $setupArchive -DestinationPath $downloadDirectory
         $setup = Get-ChildItem -LiteralPath $downloadDirectory -Filter "miktexsetup_standalone.exe" -File -Recurse |
             Select-Object -First 1
         if (-not $setup) {
             throw "The MiKTeX setup archive did not contain miktexsetup_standalone.exe."
         }
-        $signature = Get-AuthenticodeSignature -FilePath $setup.FullName
-        if ($signature.Status -ne "Valid") {
-            throw "The downloaded MiKTeX setup utility does not have a valid Authenticode signature."
-        }
-
         New-Item -ItemType Directory -Path $repository -Force | Out-Null
         Invoke-CheckedProcess -Executable $setup.FullName `
             -Arguments @(

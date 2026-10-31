@@ -183,9 +183,14 @@ function Install-Graphviz {
         $archiveUrl = $archiveMatch.Value
         $archiveName = [System.IO.Path]::GetFileName($archiveUrl)
         $archive = Join-Path $downloadDirectory $archiveName
-        Invoke-WebRequest -UseBasicParsing -Uri $archiveUrl -OutFile $archive
-        $checksumResponse = Invoke-WebRequest -UseBasicParsing -Uri "$archiveUrl.sha256"
-        $expectedDigest = $checksumResponse.Headers["x-checksum-sha256"]
+        $archiveResponse = Invoke-WebRequest -UseBasicParsing -Uri $archiveUrl -OutFile $archive -PassThru
+        $expectedDigest = $archiveResponse.Headers["x-checksum-sha256"]
+        if ($expectedDigest -notmatch '(?i)^[0-9a-f]{64}$') {
+            # Some GitLab package mirrors return a stale checksum sidecar.
+            # Prefer the digest attached to the actual archive response.
+            $checksumResponse = Invoke-WebRequest -UseBasicParsing -Uri "$archiveUrl.sha256"
+            $expectedDigest = $checksumResponse.Headers["x-checksum-sha256"]
+        }
         if ($expectedDigest -notmatch '(?i)^[0-9a-f]{64}$') {
             $checksum = [regex]::Match([string]$checksumResponse.Content, '(?i)\b[0-9a-f]{64}\b')
             if ($checksum.Success) {

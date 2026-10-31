@@ -2,6 +2,18 @@
 
 All notable changes to MarkDoc are documented here. Releases use the `vMAJOR.MINOR.PATCH` Git tag format. GitHub Release pages are the canonical place to download desktop installers.
 
+## [1.0.2] - 2026-10-31
+
+### Fixed
+
+- Graphviz installation reads the official SHA-256 from the response header and supports checksum text in the response body.
+
+### Release assets
+
+- `MarkDoc_1.0.2_x64-setup.exe` — NSIS installer.
+- `MarkDoc_1.0.2_x64_en-US.msi` — Windows Installer package.
+
+[1.0.2]: https://github.com/Prathat2006/MarkDoc/releases/tag/v1.0.2
 ## [1.0.1] - 2026-10-31
 
 ### Fixed

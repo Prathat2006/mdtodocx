@@ -185,12 +185,18 @@ function Install-Graphviz {
         $archive = Join-Path $downloadDirectory $archiveName
         Invoke-WebRequest -UseBasicParsing -Uri $archiveUrl -OutFile $archive
         $checksumResponse = Invoke-WebRequest -UseBasicParsing -Uri "$archiveUrl.sha256"
-        $checksum = [regex]::Match($checksumResponse.Content, '(?i)\b[0-9a-f]{64}\b')
-        if (-not $checksum.Success) {
-            throw "The official Graphviz checksum endpoint returned an invalid SHA-256 digest."
+        $expectedDigest = $checksumResponse.Headers["x-checksum-sha256"]
+        if ($expectedDigest -notmatch '(?i)^[0-9a-f]{64}$') {
+            $checksum = [regex]::Match([string]$checksumResponse.Content, '(?i)\b[0-9a-f]{64}\b')
+            if ($checksum.Success) {
+                $expectedDigest = $checksum.Value
+            }
+        }
+        if ($expectedDigest -notmatch '(?i)^[0-9a-f]{64}$') {
+            throw "The official Graphviz checksum endpoint did not provide a valid SHA-256 digest in its header or body."
         }
         $actualDigest = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
-        if ($actualDigest -ne $checksum.Value) {
+        if ($actualDigest -ne $expectedDigest) {
             throw "The downloaded Graphviz archive failed its SHA-256 verification."
         }
 

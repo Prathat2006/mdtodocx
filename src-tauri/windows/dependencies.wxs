@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Fragment>
+        <DirectoryRef Id="TARGETDIR">
+            <Directory Id="SystemFolder" Name="SystemFolder" />
+        </DirectoryRef>
+    </Fragment>
+
+    <Fragment>
+        <CustomAction
+            Id="SetMarkDocDependencySetup"
+            Property="RunMarkDocDependencySetup"
+            Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLDIR]install-dependencies.ps1&quot; -InstallRoot &quot;[INSTALLDIR]&quot;"
+            Execute="immediate" />
+
+        <CustomAction
+            Id="RunMarkDocDependencySetup"
+            Directory="SystemFolder"
+            ExeCommand="[CustomActionData]"
+            Execute="deferred"
+            Impersonate="no"
+            Return="ignore" />
+
+        <InstallExecuteSequence>
+            <Custom Action="SetMarkDocDependencySetup" After="InstallFiles">NOT Installed</Custom>
+            <Custom Action="RunMarkDocDependencySetup" After="SetMarkDocDependencySetup">NOT Installed</Custom>
+        </InstallExecuteSequence>
+
+        <ComponentGroup Id="MarkDocDependencyHooks">
+            <Component Id="MarkDocDependencyHookRegistration" Guid="*" Directory="INSTALLDIR">
+                <RegistryValue
+                    Root="HKCU"
+                    Key="Software\MarkDoc\MarkDoc"
+                    Name="DependencySetup"
+                    Type="integer"
+                    Value="1"
+                    KeyPath="yes" />
+            </Component>
+        </ComponentGroup>
+    </Fragment>
+</Wix>

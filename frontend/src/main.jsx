@@ -8,6 +8,8 @@ import { instance as createGraphviz } from '@viz-js/viz'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import { fromMarkdown } from 'mdast-util-from-markdown'
+import { invoke, isTauri } from '@tauri-apps/api/core'
+import { save } from '@tauri-apps/plugin-dialog'
 import './styles.css'
 import { dslToLatex, SHORTCUTS, toMarkdownMath } from './eqShortcuts.js'
 
@@ -36,7 +38,7 @@ function greet(name) {
 
 function renderMath(source) {
   const codeBlocks = []
-  const protectedSource = source.replace(/```[\s\S]*?```|`[^`]*`/g, (code) => { codeBlocks.push(code); return `\u0000CODE${codeBlocks.length - 1}\u0000` })
+  const protectedSource = source.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>|```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`]*`/gi, (code) => { codeBlocks.push(code); return `\u0000CODE${codeBlocks.length - 1}\u0000` })
   const withMath = protectedSource
     .replace(/\$\$([\s\S]+?)\$\$/g, (_, value) => katex.renderToString(value.trim(), { displayMode: true, throwOnError: false }))
     .replace(/\\\[([\s\S]+?)\\\]/g, (_, value) => katex.renderToString(value.trim(), { displayMode: true, throwOnError: false }))
@@ -110,9 +112,12 @@ function renderGraphviz(source, diagrams) {
 
 function renderTikz(source, diagrams) {
   let index = 0
-  return source.replace(/```(?:tikz|latex-diagram|pgfplots)\s*\n([\s\S]*?)\n```/gi, (_, diagram) => {
+  // The separator before the closing fence must be optional: an empty block
+  // is written as ```tikz followed immediately by the closing fence on the
+  // next line, with no extra blank content line.
+  return source.replace(/```(?:tikz|latex-diagram|pgfplots)[ \t]*\r?\n([\s\S]*?)(?:\r?\n)?```[ \t]*/gi, (_, diagram) => {
     const rendered = diagrams[index++]
-    if (!rendered) return '```tikz\n' + diagram + '\n```'
+    if (!rendered) return `<pre><code class="language-latex">${escapeHtml(diagram)}</code></pre>`
     if (rendered.image) return `<div class="tikz-diagram"><img src="${rendered.image}" alt="TikZ diagram" /></div>`
     return `<div class="tikz-diagram tikz-error"><code>${escapeHtml(rendered.error || 'This TikZ diagram could not be rendered.')}</code></div>`
   })
@@ -120,12 +125,16 @@ function renderTikz(source, diagrams) {
 
 const markdownRenderer = new marked.Renderer()
 markdownRenderer.code = ({ text, lang }) => {
-  const language = lang && hljs.getLanguage(lang) ? lang : null
-  const highlighted = language
-    ? hljs.highlight(text, { language }).value
-    : hljs.highlightAuto(text).value
-  const languageClass = language ? ` language-${escapeHtml(language)}` : ''
-  return `<pre><code class="hljs${languageClass}">${highlighted}</code></pre>`
+  try {
+    const language = lang && hljs.getLanguage(lang) ? lang : null
+    const highlighted = language
+      ? hljs.highlight(text, { language }).value
+      : hljs.highlightAuto(text).value
+    const languageClass = language ? ` language-${escapeHtml(language)}` : ''
+    return `<pre><code class="hljs${languageClass}">${highlighted}</code></pre>`
+  } catch {
+    return `<pre><code>${escapeHtml(text)}</code></pre>`
+  }
 }
 
 // Brand lockup from the SVG assets in frontend/public: logo mark + wordmark.
@@ -174,7 +183,32 @@ function markdownClassMap(source) {
     end = Math.min(source.length, end)
     for (let i = start; i < end; i++) (classes[i] ||= []).push(cls)
   }
-  const codeRanges = []
+  const collectCodeRanges = (tree) => {
+    const codeRanges = []
+    const walk = (node) => {
+      if (node.position && ((node.type === 'code' && /^\s{0,3}(?:```|~~~)/.test(source.slice(node.position.start.offset, node.position.end.offset))) || node.type === 'inlineCode')) {
+        codeRanges.push([node.position.start.offset, node.position.end.offset])
+      }
+      for (const child of node.children ?? []) walk(child)
+    }
+    walk(tree)
+    return codeRanges
+  }
+  const codeRanges = collectCodeRanges(fromMarkdown(source))
+  const mathRanges = []
+  for (const match of source.matchAll(MATH_SPANS_RE)) {
+    const start = match.index
+    const end = start + match[0].length
+    if (!codeRanges.some(([codeStart, codeEnd]) => start < codeEnd && codeStart < end)) {
+      mathRanges.push([start, end])
+    }
+  }
+  const markdownSource = source.split('')
+  for (const [start, end] of mathRanges) {
+    for (let i = start; i < end; i++) {
+      if (markdownSource[i] !== '\r' && markdownSource[i] !== '\n') markdownSource[i] = 'x'
+    }
+  }
   const walk = (node) => {
     if (node.position) {
       const { start, end } = node.position
@@ -185,7 +219,6 @@ function markdownClassMap(source) {
         cls = null
       }
       if (cls) addRange(start.offset, end.offset, cls)
-      if ((node.type === 'code' && cls) || node.type === 'inlineCode') codeRanges.push([start.offset, end.offset])
       if (node.type === 'listItem') {
         // color only the bullet / ordered marker (plus its trailing spaces)
         const first = node.children?.[0]
@@ -194,12 +227,12 @@ function markdownClassMap(source) {
     }
     for (const child of node.children ?? []) walk(child)
   }
-  walk(fromMarkdown(source))
-  // LaTeX math sweep: keep the cyan math layer, but never inside code spans/fences
-  for (const match of source.matchAll(MATH_SPANS_RE)) {
-    const start = match.index
-    const end = match.index + match[0].length
-    if (codeRanges.some(([s, e]) => start < e && s < end)) continue
+  // Mask LaTeX before parsing Markdown so underscores inside formulas cannot
+  // open an emphasis span that leaks into later equations or prose. Replacing
+  // characters with non-whitespace placeholders also prevents a leading
+  // equation from becoming an indented code block; offsets stay unchanged.
+  walk(fromMarkdown(markdownSource.join('')))
+  for (const [start, end] of mathRanges) {
     addRange(start, end, 'hljs-math')
   }
   return classes
@@ -495,6 +528,7 @@ function App() {
   const [notes, setNotes] = useState([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [saved, setSaved] = useState(() => readDraft()?.saved ?? false)
   const [maximized, setMaximized] = useState(false)
   const [liveScroll, setLiveScroll] = useState(true)
@@ -502,15 +536,37 @@ function App() {
   const [adminOpen, setAdminOpen] = useState(false)
   const [graphvizDiagrams, setGraphvizDiagrams] = useState([])
   const [tikzDiagrams, setTikzDiagrams] = useState([])
-  const [eqOpen, setEqOpen] = useState(true)
+  const [eqOpen, setEqOpen] = useState(() => {
+    try { return localStorage.getItem('mdtodocx-equation-studio-open') !== 'false' } catch { return true }
+  })
   const [reference, setReference] = useState(() => readDraft()?.reference ?? 'Default')
   const [referenceStyles, setReferenceStyles] = useState([{ id: 'Default', name: 'Default' }])
   const editorRef = useRef(null)
   const previewRef = useRef(null)
   const tikzCacheRef = useRef(new Map())
-  const preview = useMemo(() => ({
-    __html: marked.parse(renderMath(renderTikz(renderMermaid(renderGraphviz(normalizeIndentedCode(markdown)), tikzDiagrams))), { renderer: markdownRenderer }).replace(/\u0001/g, '\n')
-  }), [markdown, graphvizDiagrams, tikzDiagrams])
+  const preview = useMemo(() => {
+    try {
+      // Process math while every diagram is still a fenced code block. Once a
+      // diagram becomes raw HTML/SVG, math delimiters in its source must not be
+      // interpreted as equations.
+      const withMath = renderMath(normalizeIndentedCode(markdown))
+      const withGraphviz = renderGraphviz(withMath, graphvizDiagrams)
+      const withMermaid = renderMermaid(withGraphviz)
+      const source = renderTikz(withMermaid, tikzDiagrams)
+      return { __html: marked.parse(source, { renderer: markdownRenderer }).replace(/\u0001/g, '\n') }
+    } catch (renderError) {
+      console.error('Markdown preview rendering failed:', renderError)
+      try {
+        // Keep ordinary Markdown formatting even if an enhancement fails; a
+        // failing diagram must not turn the entire document into one code box.
+        const fallback = renderTikz(markdown, tikzDiagrams)
+        return { __html: marked.parse(fallback, { renderer: markdownRenderer }) }
+      } catch (fallbackError) {
+        console.error('Markdown fallback rendering failed:', fallbackError)
+        return { __html: `<div class="preview-render-error">Preview could not be rendered. Your Markdown is still available in the editor.</div>` }
+      }
+    }
+  }, [markdown, graphvizDiagrams, tikzDiagrams])
 
   useEffect(() => { fetch('/api/auth/me').then(response => response.ok ? response.json() : null).then(value => { setUser(value); setAuthChecked(true) }).catch(() => setAuthChecked(true)) }, [])
   useEffect(() => { if (user) { loadNotes(); loadStyles() } }, [user])
@@ -521,6 +577,9 @@ function App() {
     document.documentElement.dataset.theme = darkMode ? 'dark' : 'light'
     localStorage.setItem('mdtodocx-theme', darkMode ? 'dark' : 'light')
   }, [darkMode])
+  useEffect(() => {
+    try { localStorage.setItem('mdtodocx-equation-studio-open', String(eqOpen)) } catch { /* preference storage is optional */ }
+  }, [eqOpen])
   useEffect(() => {
     mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'strict' })
     mermaid.run({ nodes: previewRef.current?.querySelectorAll('.mermaid') || [] }).catch(() => setError('One of the Mermaid diagrams could not be rendered.'))
@@ -548,7 +607,7 @@ function App() {
   }, [markdown])
   useEffect(() => {
     let cancelled = false
-    const blocks = [...markdown.matchAll(/```(?:tikz|latex-diagram|pgfplots)\s*\n([\s\S]*?)\n```/gi)]
+    const blocks = [...markdown.matchAll(/```(?:tikz|latex-diagram|pgfplots)[ \t]*\r?\n([\s\S]*?)(?:\r?\n)?```[ \t]*/gi)]
     const sources = blocks.map(([, source]) => source.trim())
     // Empty fences never need the server; seed the cache locally.
     const EMPTY_TIKZ = { error: 'This TikZ fence is empty.' }
@@ -647,12 +706,34 @@ function App() {
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
   async function exportDoc() {
-    setBusy(true); setError('')
+    setBusy(true); setError(''); setNotice('')
     try {
       const response = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ markdown, filename: `${filename || 'document'}.md`, reference }) })
       if (!response.ok) { const body = await response.json(); throw new Error(body.detail || 'Export failed') }
-      const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `${filename || 'document'}.docx`; link.click(); URL.revokeObjectURL(url)
-    } catch (e) { setError(e.message) } finally { setBusy(false) }
+      const blob = await response.blob()
+      const suggestedName = `${filename || 'document'}.docx`
+      if (isTauri()) {
+        const path = await save({
+          defaultPath: suggestedName,
+          filters: [{ name: 'Word document', extensions: ['docx'] }],
+        })
+        if (path) {
+          const result = await invoke('save_export_file', {
+            path,
+            contents: Array.from(new Uint8Array(await blob.arrayBuffer())),
+          })
+          setNotice(`Saved ${result.bytesWritten.toLocaleString()} bytes to ${result.path}`)
+        }
+      } else {
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = suggestedName
+        link.click()
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+        setNotice('The document download has started.')
+      }
+    } catch (e) { setError(e.message || String(e)) } finally { setBusy(false) }
   }
   function syncScroll(event) {
     if (!liveScroll) return
@@ -680,7 +761,7 @@ function App() {
             <span><b className="dot blue" /> Markdown</span>
             <span className="head-tools">
               <span className="hint">{markdown.length.toLocaleString()} characters</span>
-              <button className="icon-button" title="Maximize editor" onClick={() => setMaximized(true)}>⛶</button>
+              <button className="icon-button" title={maximized ? 'Restore workspace' : 'Maximize workspace'} onClick={() => setMaximized(value => !value)}>⛶</button>
             </span>
           </div>
           
@@ -712,7 +793,7 @@ function App() {
         </div>
       </div>
     </section>
-    {error && <div className="error">{error}</div>}{adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}
+    {error && <div className="error" role="alert">{error}</div>}{notice && <div className="notice" role="status">{notice}</div>}{adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}
     {eqOpen && <EquationHelper onInsert={insertEq} onClose={() => setEqOpen(false)} />}
     {!eqOpen && <button className="eq-fab" onClick={() => setEqOpen(true)} title="Open Equation Studio">∑ fx</button>}
     <footer><span>⌘ Enter to export · Esc to exit maximize</span><span>Powered by FastAPI + Pandoc + SQLite</span></footer>

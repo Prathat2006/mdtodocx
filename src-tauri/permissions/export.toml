@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-save-export-file"
+description = "Allows the app to save an exported document to the path selected in the native save dialog."
+commands.allow = ["save_export_file"]

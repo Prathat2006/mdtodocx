@@ -15,6 +15,11 @@ wheels/
 # Frontend
 node_modules/
 frontend/dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+src-tauri/install-dependencies.log
+src-tauri/resources/tools/*
+!src-tauri/resources/tools/.gitkeep
 # env
 .env
 frontend/.env

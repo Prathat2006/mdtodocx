@@ -476,8 +476,8 @@ def render_graphviz_blocks(markdown: str, job_dir: Path) -> str:
         
         try:
             subprocess.run(
-                # Added "-Kneato" to force the correct layout engine
-                [graphviz_cli, "-Kneato", "-Tpng", "-Gdpi=300", str(source_path), "-o", str(image_path)],
+                # Keep Graphviz's default `dot` engine to match the live SVG preview.
+                [graphviz_cli, "-Tpng", "-Gdpi=300", str(source_path), "-o", str(image_path)],
                 check=True,
                 capture_output=True,
                 text=True,

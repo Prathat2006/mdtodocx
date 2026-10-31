@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MarkDoc",
+  "version": "1.0.0",
+  "identifier": "com.markdoc.desktop",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self' http://127.0.0.1:*; connect-src ipc: http://127.0.0.1:*; img-src 'self' data: blob: http://127.0.0.1:*; style-src 'self' 'unsafe-inline' http://127.0.0.1:*; script-src 'self' http://127.0.0.1:*"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "../frontend/dist/": "frontend-dist/",
+      "../references/": "references/",
+      "../frontend/public/favicon.svg": "icons/favicon.svg",
+      "../puppeteer-config.json": "puppeteer-config.json",
+      "resources/install-dependencies.ps1": "install-dependencies.ps1"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "displayLanguageSelector": false,
+        "languages": ["English"],
+        "installerHooks": "./windows/hooks.nsh"
+      },
+      "wix": {
+        "fragmentPaths": ["./windows/dependencies.wxs"],
+        "componentGroupRefs": ["MarkDocDependencyHooks"]
+      }
+    }
+  }
+}

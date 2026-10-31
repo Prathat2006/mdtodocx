@@ -1,4 +1,4 @@
-# MarkDoc
+# MarkDoc 1.0.0
 
 A small Markdown editor that converts your writing to an editable `.docx` file with FastAPI, React, and Pandoc. It supports inline/display LaTeX (`$x^2$`, `\\(x^2\\)`, `$$x^2$$`, `\\[x^2\\]`), pipe tables, raw HTML tables, Mermaid diagrams, Graphviz diagrams, and TikZ/LaTeX diagrams.
 
@@ -6,7 +6,7 @@ A small Markdown editor that converts your writing to an editable `.docx` file w
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
-- Node.js 22.12+ (required by Mermaid CLI 12)
+- Node.js 22.13+ (required by Mermaid CLI 12)
 - [Pandoc](https://pandoc.org/installing.html) installed and available on your PATH
 - Mermaid CLI 12 installed and available on your PATH: `npm install --global @mermaid-js/mermaid-cli@12`
 - Graphviz installed with the `dot` command available on your PATH
@@ -46,6 +46,35 @@ Open http://127.0.0.1:8000. The FastAPI app serves `frontend/dist` when it exist
 
 The supplied `reference.docx` is used automatically when it is present. Temporary Markdown and DOCX files are created under `.tmp` and the generated DOCX is removed after download.
 
+## Windows desktop app
+
+The desktop shell uses Tauri and a Rust backend while serving the existing frontend unchanged. It uses a local SQLite database for its single local account and notes. The NSIS installer is configured to install the `references/` templates automatically. The Windows app icon is generated from `frontend/public/favicon.svg`.
+
+Build prerequisites are Rust, Node.js/npm, the Visual Studio C++ build tools and Windows SDK, and WebView2. Build both Windows installer formats with:
+
+```powershell
+cargo install tauri-cli --version 2.12.4 --locked
+cargo tauri dev
+cargo tauri build --bundles nsis,msi
+```
+
+The release artifacts are written to `src-tauri/target/release/bundle/nsis/` and `src-tauri/target/release/bundle/msi/`.
+
+Both NSIS (`.exe`) and WiX (`.msi`) installers run `src-tauri/resources/install-dependencies.ps1` after copying the app: NSIS uses its post-install hook and MSI uses a WiX custom action. The script reuses Pandoc and TeX tools found on `PATH` or in standard Windows install locations; if they are missing, it downloads Pandoc (SHA-256 verified against GitHub release metadata) and/or a basic portable MiKTeX installation into MarkDoc's installation directory. MiKTeX can download additional TeX packages when TikZ exports need them. The setup script also reuses Graphviz and Mermaid tools when available, or downloads Graphviz, Node.js, Mermaid CLI, and Chromium into MarkDoc's installation directory. Downloads are verified against upstream SHA-256 metadata where provided. Setup therefore requires an internet connection when WebView2 or any required runtime is not already available. Runtime dependencies are no longer copied into the installer during the build.
+
+The desktop backend checks app-local tools first, then falls back to tools available on `PATH`. Mermaid can use an existing Chromium, Chrome, or Edge installation; otherwise setup downloads Chromium alongside the app-local Mermaid runtime.
+
+The dependency setup writes `install-dependencies.log` in the installation folder. It needs internet access when Pandoc, MiKTeX, Graphviz, Mermaid, Node.js, or Chromium are not already available. MSI continues if dependency setup fails; check the log and ensure the export dependencies are installed before relying on export.
+
+## Releases
+
+The current stable release is **1.0.0**. Download the Windows installers from [GitHub Releases](https://github.com/Prathat2006/mdtodocx/releases/latest):
+
+- `MarkDoc_1.0.0_x64-setup.exe` — NSIS installer.
+- `MarkDoc_1.0.0_x64_en-US.msi` — Windows Installer package.
+
+Release notes and version history are in [CHANGELOG.md](CHANGELOG.md). Release tags use the `vMAJOR.MINOR.PATCH` format (for example, `v1.0.0`). The product version is kept in sync across `pyproject.toml`, `frontend/package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
+
 Use a fenced Mermaid block in the editor:
 
 ````markdown
@@ -67,7 +96,7 @@ digraph G {
 ```
 ````
 
-The browser renders Graphviz as an SVG image, while the DOCX contains a generated PNG image.
+The browser renders Graphviz as an SVG image; DOCX export renders a 300-DPI PNG. Both use Graphviz's default `dot` layout engine, so nodes and edges keep the same arrangement. The preview remains sharper because SVG is vector-based while the DOCX image is raster-based.
 
 Use a fenced `tikz`, `latex-diagram`, or `pgfplots` block for LaTeX/TikZ diagrams (the content may also be a complete LaTeX document with its own `\documentclass`):
 

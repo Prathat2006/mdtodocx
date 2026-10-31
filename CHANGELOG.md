@@ -2,6 +2,19 @@
 
 All notable changes to MarkDoc are documented here. Releases use the `vMAJOR.MINOR.PATCH` Git tag format. GitHub Release pages are the canonical place to download desktop installers.
 
+## [1.0.7] - 2026-11-01
+
+### Fixed
+
+- MSI dependency setup now uses the actual install directory as its working directory instead of creating an invalid `SystemFolder` directory under the drive root.
+- MSI dependency setup runs as the installing user so downloads use that user's network access.
+
+### Release assets
+
+- `MarkDoc_1.0.7_x64-setup.exe` — NSIS installer.
+- `MarkDoc_1.0.7_x64_en-US.msi` — Windows Installer package.
+
+[1.0.7]: https://github.com/Prathat2006/MarkDoc/releases/tag/v1.0.7
 ## [1.0.6] - 2026-11-01
 
 ### Fixed

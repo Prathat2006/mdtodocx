@@ -37,7 +37,7 @@ SESSION_COOKIE = "mdtodocx_session"
 SESSION_TTL = 60 * 60 * 24 * 14
 COOKIE_SECURE = os.getenv("MDTODOCX_COOKIE_SECURE", "0") == "1"
 REFERENCE_FOLDER.mkdir(parents=True, exist_ok=True)
-app = FastAPI(title="Markdown to DOCX", version="1.0.5")
+app = FastAPI(title="Markdown to DOCX", version="1.0.6")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

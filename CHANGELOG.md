@@ -2,6 +2,19 @@
 
 All notable changes to MarkDoc are documented here. Releases use the `vMAJOR.MINOR.PATCH` Git tag format. GitHub Release pages are the canonical place to download desktop installers.
 
+## [1.0.6] - 2026-11-01
+
+### Fixed
+
+- Desktop export resolves app-local tools beside the executable as well as in the Tauri resource directory.
+- Export process-start errors include the working directory to make path failures diagnosable.
+
+### Release assets
+
+- `MarkDoc_1.0.6_x64-setup.exe` — NSIS installer.
+- `MarkDoc_1.0.6_x64_en-US.msi` — Windows Installer package.
+
+[1.0.6]: https://github.com/Prathat2006/MarkDoc/releases/tag/v1.0.6
 ## [1.0.5] - 2026-10-31
 
 ### Fixed

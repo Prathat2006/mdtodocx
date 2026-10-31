@@ -38,22 +38,48 @@ pub struct ExportOptions<'a> {
     pub puppeteer_config: &'a Path,
 }
 
-fn app_local_miktex_bin(tools: &ToolPaths) -> PathBuf {
-    let legacy = tools
-        .resource_dir
-        .join("tools")
-        .join("miktex")
-        .join("texmfs")
-        .join("install")
-        .join("miktex")
-        .join("bin")
-        .join("x64");
-    if legacy.is_dir() {
-        return legacy;
+fn app_tools_roots(tools: &ToolPaths) -> Vec<PathBuf> {
+    let mut roots = vec![tools.resource_dir.join("tools")];
+    if !tools.development {
+        if let Some(executable_dir) = env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+        {
+            let install_tools = executable_dir.join("tools");
+            if !roots.contains(&install_tools) {
+                roots.push(install_tools);
+            }
+        }
     }
-    tools
-        .resource_dir
-        .join("tools")
+    roots
+}
+
+fn app_local_miktex_bin(tools: &ToolPaths) -> PathBuf {
+    for root in app_tools_roots(tools) {
+        let legacy = root
+            .join("miktex")
+            .join("texmfs")
+            .join("install")
+            .join("miktex")
+            .join("bin")
+            .join("x64");
+        if legacy.is_dir() {
+            return legacy;
+        }
+        let current = root
+            .join("miktex")
+            .join("texmfs")
+            .join("install")
+            .join("bin")
+            .join("x64");
+        if current.is_dir() {
+            return current;
+        }
+    }
+    app_tools_roots(tools)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| tools.resource_dir.join("tools"))
         .join("miktex")
         .join("texmfs")
         .join("install")
@@ -142,10 +168,13 @@ fn available_tool(tools: &ToolPaths, name: &str) -> Result<PathBuf, String> {
         ],
         _ => return Err(format!("Unknown tool: {name}")),
     };
-    for candidate in candidates {
-        let path = tools.resource_dir.join(candidate);
-        if path.is_file() {
-            return Ok(path);
+    for root in app_tools_roots(tools) {
+        for candidate in candidates {
+            let relative = candidate.strip_prefix("tools/").unwrap_or(candidate);
+            let path = root.join(relative);
+            if path.is_file() {
+                return Ok(path);
+            }
         }
     }
     if let Some(path) = find_on_path(name) {
@@ -252,13 +281,18 @@ fn configure_runtime(
         return Ok(());
     }
 
-    let tool_root = tools.resource_dir.join("tools");
-    let mut app_paths = vec![
-        tool_root.join("pandoc"),
-        tool_root.join("mermaid"),
-        tool_root.join("graphviz").join("bin"),
-        app_local_miktex_bin(tools),
-    ];
+    let tool_roots = app_tools_roots(tools);
+    let mut app_paths = tool_roots
+        .iter()
+        .flat_map(|tool_root| {
+            [
+                tool_root.join("pandoc"),
+                tool_root.join("mermaid"),
+                tool_root.join("graphviz").join("bin"),
+            ]
+        })
+        .collect::<Vec<_>>();
+    app_paths.push(app_local_miktex_bin(tools));
     app_paths.retain(|path| path.is_dir());
     if let Some(system_root) = env::var_os("SystemRoot") {
         app_paths.push(PathBuf::from(system_root).join("System32"));
@@ -271,7 +305,7 @@ fn configure_runtime(
     .map_err(|error| error.to_string())?;
     command.env("PATH", path);
 
-    if let Some(browser) = find_app_browser(&tool_root) {
+    if let Some(browser) = tool_roots.iter().find_map(|root| find_app_browser(root)) {
         command.env("PUPPETEER_EXECUTABLE_PATH", browser);
     } else if executable
         .file_stem()
@@ -324,9 +358,15 @@ fn run(
     });
     #[cfg(windows)]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Could not start {}: {error}", executable.display()))?;
+    let mut child = command.spawn().map_err(|error| {
+        let working_directory = cwd
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "inherited working directory".to_owned());
+        format!(
+            "Could not start {} with working directory {working_directory}: {error}",
+            executable.display()
+        )
+    })?;
     if let Some(input) = stdin {
         if let Some(mut pipe) = child.stdin.take() {
             pipe.write_all(input).map_err(|error| error.to_string())?;

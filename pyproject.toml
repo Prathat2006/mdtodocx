@@ -1,6 +1,6 @@
 [project]
 name = "mdtodocx"
-version = "1.0.7"
+version = "1.0.8"
 description = "A Markdown editor that exports documents to DOCX"
 readme = "README.md"
 requires-python = ">=3.12"

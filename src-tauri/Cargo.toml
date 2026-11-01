@@ -1,6 +1,6 @@
 [package]
 name = "mdtodocx-desktop"
-version = "1.0.7"
+version = "1.0.8"
 description = "MarkDoc desktop application"
 authors = ["MarkDoc"]
 edition = "2021"

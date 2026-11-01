@@ -38,13 +38,18 @@ function greet(name) {
 
 function renderMath(source) {
   const codeBlocks = []
+  const mathBlocks = []
+  const render = (value, displayMode) => {
+    mathBlocks.push(katex.renderToString(value, { displayMode, throwOnError: false }))
+    return `\u0000MATH${mathBlocks.length - 1}\u0000`
+  }
   const protectedSource = source.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>|```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`]*`/gi, (code) => { codeBlocks.push(code); return `\u0000CODE${codeBlocks.length - 1}\u0000` })
   const withMath = protectedSource
-    .replace(/\$\$([\s\S]+?)\$\$/g, (_, value) => katex.renderToString(value.trim(), { displayMode: true, throwOnError: false }))
-    .replace(/\\\[([\s\S]+?)\\\]/g, (_, value) => katex.renderToString(value.trim(), { displayMode: true, throwOnError: false }))
-    .replace(/\\\((.+?)\\\)/g, (_, value) => katex.renderToString(value.trim(), { throwOnError: false }))
-    .replace(/(?<!\\)\$([^$\n]+?)\$/g, (_, value) => katex.renderToString(value.trim(), { throwOnError: false }))
-  return withMath.replace(/\u0000CODE(\d+)\u0000/g, (_, index) => codeBlocks[Number(index)])
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_, value) => render(value.trim(), true))
+    .replace(/\\\[([\s\S]+?)\\\]/g, (_, value) => render(value.trim(), true))
+    .replace(/\\\((.+?)\\\)/g, (_, value) => render(value.trim(), false))
+    .replace(/(?<!\\)\$([^$\n]+?)\$/g, (_, value) => render(value.trim(), false))
+  return { source: withMath, codeBlocks, mathBlocks }
 }
 
 function escapeHtml(value) { 
@@ -549,11 +554,14 @@ function App() {
       // Process math while every diagram is still a fenced code block. Once a
       // diagram becomes raw HTML/SVG, math delimiters in its source must not be
       // interpreted as equations.
-      const withMath = renderMath(normalizeIndentedCode(markdown))
-      const withGraphviz = renderGraphviz(withMath, graphvizDiagrams)
+      const math = renderMath(normalizeIndentedCode(markdown))
+      const withGraphviz = renderGraphviz(math.source, graphvizDiagrams)
       const withMermaid = renderMermaid(withGraphviz)
       const source = renderTikz(withMermaid, tikzDiagrams)
-      return { __html: marked.parse(source, { renderer: markdownRenderer }).replace(/\u0001/g, '\n') }
+      let html = marked.parse(source, { renderer: markdownRenderer }).replace(/\u0001/g, '\n')
+      html = html.replace(/\u0000MATH(\d+)\u0000/g, (_, index) => math.mathBlocks[Number(index)])
+      html = html.replace(/\u0000CODE(\d+)\u0000/g, (_, index) => math.codeBlocks[Number(index)])
+      return { __html: html }
     } catch (renderError) {
       console.error('Markdown preview rendering failed:', renderError)
       try {

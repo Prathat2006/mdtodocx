@@ -2,6 +2,19 @@
 
 All notable changes to MarkDoc are documented here. Releases use the `vMAJOR.MINOR.PATCH` Git tag format. GitHub Release pages are the canonical place to download desktop installers.
 
+## [1.0.8] - 2026-11-02
+
+### Fixed
+
+- Math preview output is preserved through Markdown parsing, so vertical bars in equations cannot break the equation or following text.
+
+### Release assets
+
+- `MarkDoc_1.0.8_x64-setup.exe` — NSIS installer.
+- `MarkDoc_1.0.8_x64_en-US.msi` — Windows Installer package.
+
+[1.0.8]: https://github.com/Prathat2006/MarkDoc/releases/tag/v1.0.8
+
 ## [1.0.7] - 2026-11-01
 
 ### Fixed

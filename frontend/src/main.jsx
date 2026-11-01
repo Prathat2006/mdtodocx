@@ -37,19 +37,24 @@ function greet(name) {
 > Your content is converted securely on the server.`
 
 function renderMath(source) {
-  const codeBlocks = []
   const mathBlocks = []
   const render = (value, displayMode) => {
     mathBlocks.push(katex.renderToString(value, { displayMode, throwOnError: false }))
     return `\u0000MATH${mathBlocks.length - 1}\u0000`
   }
-  const protectedSource = source.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>|```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`]*`/gi, (code) => { codeBlocks.push(code); return `\u0000CODE${codeBlocks.length - 1}\u0000` })
+  // Hide math before Markdown parsing, but leave code fences intact so marked
+  // and the diagram renderers can still recognize code and diagram languages.
+  const protectedSource = source.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>|```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`]*`/gi, (code) => {
+    const index = mathBlocks.push(code) - 1
+    return `\u0000CODE${index}\u0000`
+  })
   const withMath = protectedSource
     .replace(/\$\$([\s\S]+?)\$\$/g, (_, value) => render(value.trim(), true))
     .replace(/\\\[([\s\S]+?)\\\]/g, (_, value) => render(value.trim(), true))
     .replace(/\\\((.+?)\\\)/g, (_, value) => render(value.trim(), false))
     .replace(/(?<!\\)\$([^$\n]+?)\$/g, (_, value) => render(value.trim(), false))
-  return { source: withMath, codeBlocks, mathBlocks }
+  const sourceWithCodeRestored = withMath.replace(/\u0000CODE(\d+)\u0000/g, (_, index) => mathBlocks[Number(index)])
+  return { source: sourceWithCodeRestored, mathBlocks }
 }
 
 function escapeHtml(value) { 
@@ -560,7 +565,6 @@ function App() {
       const source = renderTikz(withMermaid, tikzDiagrams)
       let html = marked.parse(source, { renderer: markdownRenderer }).replace(/\u0001/g, '\n')
       html = html.replace(/\u0000MATH(\d+)\u0000/g, (_, index) => math.mathBlocks[Number(index)])
-      html = html.replace(/\u0000CODE(\d+)\u0000/g, (_, index) => math.codeBlocks[Number(index)])
       return { __html: html }
     } catch (renderError) {
       console.error('Markdown preview rendering failed:', renderError)

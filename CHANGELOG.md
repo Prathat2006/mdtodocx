@@ -2,6 +2,20 @@
 
 All notable changes to MarkDoc are documented here. Releases use the `vMAJOR.MINOR.PATCH` Git tag format. GitHub Release pages are the canonical place to download desktop installers.
 
+## [1.0.9] - 2026-11-02
+
+### Fixed
+
+- Fenced code blocks are restored before diagram rendering and Markdown parsing, preserving syntax highlighting and Graphviz, Mermaid, and TikZ previews.
+- MSI dependency setup no longer aborts installation when dependency bootstrap fails; details remain available in `install-dependencies.log`.
+
+### Release assets
+
+- `MarkDoc_1.0.9_x64-setup.exe` — NSIS installer.
+- `MarkDoc_1.0.9_x64_en-US.msi` — Windows Installer package.
+
+[1.0.9]: https://github.com/Prathat2006/MarkDoc/releases/tag/v1.0.9
+
 ## [1.0.8] - 2026-11-02
 
 ### Fixed
